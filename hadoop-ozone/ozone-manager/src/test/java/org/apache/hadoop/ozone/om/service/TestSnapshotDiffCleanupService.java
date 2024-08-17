@@ -27,16 +27,15 @@ import org.apache.hadoop.hdds.utils.db.managed.ManagedDBOptions;
 import org.apache.hadoop.hdds.utils.db.managed.ManagedRocksDB;
 import org.apache.hadoop.hdds.utils.db.managed.ManagedRocksIterator;
 import org.apache.hadoop.ozone.om.OzoneManager;
-import org.apache.hadoop.ozone.om.codec.OmDBDiffReportEntryCodec;
-import org.apache.hadoop.ozone.om.snapshot.SnapshotDiffJob;
+import org.apache.hadoop.ozone.om.helpers.SnapshotDiffJob;
 import org.apache.hadoop.ozone.snapshot.SnapshotDiffReportOzone;
 import org.apache.hadoop.ozone.snapshot.SnapshotDiffResponse.JobStatus;
-import org.apache.ozone.test.GenericTestUtils;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
 import org.mockito.Mock;
 import org.mockito.MockitoAnnotations;
 import org.rocksdb.ColumnFamilyDescriptor;
@@ -45,6 +44,7 @@ import org.rocksdb.RocksDBException;
 
 import java.io.File;
 import java.io.IOException;
+import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.time.Duration;
 import java.util.ArrayList;
@@ -73,7 +73,8 @@ import static org.mockito.Mockito.when;
  * Tests SnapshotDiffCleanupService.
  */
 public class TestSnapshotDiffCleanupService {
-  private static File file;
+  @TempDir
+  private static Path tempDir;
   private static ManagedRocksDB db;
   private static ManagedDBOptions dbOptions;
   private static ManagedColumnFamilyOptions columnFamilyOptions;
@@ -103,7 +104,7 @@ public class TestSnapshotDiffCleanupService {
     dbOptions.setCreateIfMissing(true);
     columnFamilyOptions = new ManagedColumnFamilyOptions();
 
-    file = new File("./test-snap-diff-clean-up");
+    File file = tempDir.resolve("./test-snap-diff-clean-up").toFile();
     if (!file.mkdirs() && !file.exists()) {
       throw new IllegalArgumentException("Unable to create directory " +
           file);
@@ -134,8 +135,6 @@ public class TestSnapshotDiffCleanupService {
     if (db != null) {
       db.close();
     }
-
-    GenericTestUtils.deleteDirectory(file);
   }
 
   @BeforeEach
@@ -171,9 +170,8 @@ public class TestSnapshotDiffCleanupService {
     final CodecRegistry.Builder b = CodecRegistry.newBuilder();
     // DiffReportEntry codec for Diff Report.
     b.addCodec(SnapshotDiffReportOzone.DiffReportEntry.class,
-        new OmDBDiffReportEntryCodec());
-    b.addCodec(SnapshotDiffJob.class,
-        new SnapshotDiffJob.SnapshotDiffJobCodec());
+        SnapshotDiffReportOzone.getDiffReportEntryCodec());
+    b.addCodec(SnapshotDiffJob.class, SnapshotDiffJob.getCodec());
     codecRegistry = b.build();
     emptyReportEntry = codecRegistry.asRawData("{}");
 
@@ -301,7 +299,7 @@ public class TestSnapshotDiffCleanupService {
     String jobKey = fromSnapshot + DELIMITER + toSnapshot;
 
     SnapshotDiffJob job = new SnapshotDiffJob(creationTime, jobId, jobStatus,
-        volume, bucket, fromSnapshot, toSnapshot, false, noOfEntries);
+        volume, bucket, fromSnapshot, toSnapshot, false, false, noOfEntries);
 
     db.get().put(jobTableCfh, codecRegistry.asRawData(jobKey),
         codecRegistry.asRawData(job));

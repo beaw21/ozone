@@ -19,16 +19,12 @@
 package org.apache.hadoop.ozone;
 
 import org.apache.hadoop.hdds.annotation.InterfaceAudience;
-import org.apache.hadoop.security.UserGroupInformation;
-import org.apache.ratis.thirdparty.io.grpc.Context;
-import org.apache.ratis.thirdparty.io.grpc.Metadata;
 
 import java.nio.charset.Charset;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.util.regex.Pattern;
-
-import static org.apache.ratis.thirdparty.io.grpc.Metadata.ASCII_STRING_MARSHALLER;
 
 /**
  * Set of constants used in Ozone implementation.
@@ -101,6 +97,7 @@ public final class OzoneConsts {
   public static final String OZONE_HTTP_SCHEME = "http";
   public static final String OZONE_URI_DELIMITER = "/";
   public static final String OZONE_ROOT = OZONE_URI_DELIMITER;
+  public static final Path ROOT_PATH = Paths.get(OZONE_ROOT);
 
 
   public static final String CONTAINER_EXTENSION = ".container";
@@ -118,20 +115,21 @@ public final class OzoneConsts {
   public static final String CHUNK_OVERWRITE = "OverWriteRequested";
 
   public static final int CHUNK_SIZE = 1 * 1024 * 1024; // 1 MB
+  // for client and DataNode to label a block contains a incremental chunk list.
+  public static final String INCREMENTAL_CHUNK_LIST = "incremental";
   public static final long KB = 1024L;
   public static final long MB = KB * 1024L;
   public static final long GB = MB * 1024L;
   public static final long TB = GB * 1024L;
+  public static final long PB = TB * 1024L;
+  public static final long EB = PB * 1024L;
 
   /**
    * level DB names used by SCM and data nodes.
    */
   public static final String CONTAINER_DB_SUFFIX = "container.db";
   public static final String PIPELINE_DB_SUFFIX = "pipeline.db";
-  public static final String CRL_DB_SUFFIX = "crl.db";
   public static final String DN_CONTAINER_DB = "-dn-" + CONTAINER_DB_SUFFIX;
-  public static final String DN_CRL_DB = "dn-" + CRL_DB_SUFFIX;
-  public static final String CRL_DB_DIRECTORY_NAME = "crl";
   public static final String OM_DB_NAME = "om.db";
   public static final String SCM_DB_NAME = "scm.db";
   public static final String OM_DB_BACKUP_PREFIX = "om.db.backup.";
@@ -149,16 +147,7 @@ public final class OzoneConsts {
   public static final String RANGER_OZONE_SERVICE_VERSION_KEY =
       "#RANGEROZONESERVICEVERSION";
 
-  /**
-   * Supports Bucket Versioning.
-   */
-  public enum Versioning {
-    NOT_DEFINED, ENABLED, DISABLED;
-
-    public static Versioning getVersioning(boolean versioning) {
-      return versioning ? ENABLED : DISABLED;
-    }
-  }
+  public static final String MULTIPART_FORM_DATA_BOUNDARY = "---XXX";
 
   // Block ID prefixes used in datanode containers.
   public static final String DELETING_KEY_PREFIX = "#deleting#";
@@ -197,6 +186,7 @@ public final class OzoneConsts {
   public static final String OM_KEY_PREFIX = "/";
   public static final String OM_USER_PREFIX = "$";
   public static final String OM_S3_PREFIX = "S3:";
+  public static final String OM_S3_CALLER_CONTEXT_PREFIX = "S3Auth:S3G|";
   public static final String OM_S3_VOLUME_PREFIX = "s3";
   public static final String OM_S3_SECRET = "S3Secret:";
   public static final String OM_PREFIX = "Prefix:";
@@ -291,9 +281,6 @@ public final class OzoneConsts {
   // but have containerID as key prefixes.
   public static final String SCHEMA_V3 = "3";
 
-  public static final String[] SCHEMA_VERSIONS =
-      new String[] {SCHEMA_V1, SCHEMA_V2, SCHEMA_V3};
-
   // Supported store types.
   public static final String OZONE = "ozone";
   public static final String S3 = "s3";
@@ -325,6 +312,7 @@ public final class OzoneConsts {
   public static final String ADD_ACLS = "addAcls";
   public static final String REMOVE_ACLS = "removeAcls";
   public static final String MAX_NUM_OF_BUCKETS = "maxNumOfBuckets";
+  public static final String HAS_SNAPSHOT = "hasSnapshot";
   public static final String TO_KEY_NAME = "toKeyName";
   public static final String STORAGE_TYPE = "storageType";
   public static final String RESOURCE_TYPE = "resourceType";
@@ -356,6 +344,7 @@ public final class OzoneConsts {
   public static final String BUCKET_LAYOUT = "bucketLayout";
   public static final String TENANT = "tenant";
   public static final String USER_PREFIX = "userPrefix";
+  public static final String REWRITE_GENERATION = "rewriteGeneration";
 
   // For multi-tenancy
   public static final String TENANT_ID_USERNAME_DELIMITER = "$";
@@ -376,15 +365,9 @@ public final class OzoneConsts {
   // For Multipart upload
   public static final int OM_MULTIPART_MIN_SIZE = 5 * 1024 * 1024;
 
-  // GRPC block token metadata header and context key
-  public static final String OZONE_BLOCK_TOKEN = "blocktoken";
-  public static final Context.Key<UserGroupInformation> UGI_CTX_KEY =
-      Context.key("UGI");
-
-  public static final Metadata.Key<String> OBT_METADATA_KEY =
-      Metadata.Key.of(OZONE_BLOCK_TOKEN, ASCII_STRING_MARSHALLER);
-  public static final Metadata.Key<String> USER_METADATA_KEY =
-      Metadata.Key.of(OZONE_USER, ASCII_STRING_MARSHALLER);
+  // refer to :
+  // https://docs.aws.amazon.com/AmazonS3/latest/userguide/qfacts.html
+  public static final int MAXIMUM_NUMBER_OF_PARTS_PER_UPLOAD = 10000;
 
   public static final String RPC_PORT = "RPC";
 
@@ -405,6 +388,10 @@ public final class OzoneConsts {
 
   /** Metadata stored in OmKeyInfo. */
   public static final String HSYNC_CLIENT_ID = "hsyncClientId";
+  public static final String LEASE_RECOVERY = "leaseRecovery";
+  public static final String DELETED_HSYNC_KEY = "deletedHsyncKey";
+  public static final String OVERWRITTEN_HSYNC_KEY = "overwrittenHsyncKey";
+  public static final String FORCE_LEASE_RECOVERY_ENV = "OZONE.CLIENT.RECOVER.LEASE.FORCE";
 
   //GDPR
   public static final String GDPR_FLAG = "gdprEnabled";
@@ -422,12 +409,12 @@ public final class OzoneConsts {
    * contains illegal characters when creating/renaming key.
    *
    * Avoid the following characters in a key name:
-   * "\", "{", "}", "^", "<", ">", "#", "|", "%", "`", "[", "]", "~", "?"
-   * and Non-printable ASCII characters (128–255 decimal characters).
-   * https://docs.aws.amazon.com/AmazonS3/latest/dev/UsingMetadata.html
+   * "\", "{", "}", "<", ">", "^", "%", "~", "#", "|", "`", "[", "]", Quotation
+   * marks and Non-printable ASCII characters (128–255 decimal characters).
+   * https://docs.aws.amazon.com/AmazonS3/latest/userguide/object-keys.html
    */
   public static final Pattern KEYNAME_ILLEGAL_CHARACTER_CHECK_REGEX  =
-          Pattern.compile("^[^^{}<>^?%~#`\\[\\]\\|\\\\(\\x80-\\xff)]+$");
+          Pattern.compile("^[^\\\\{}<>^%~#|`\\[\\]\"\\x80-\\xff]+$");
 
   public static final String FS_FILE_COPYING_TEMP_SUFFIX = "._COPYING_";
 
@@ -469,9 +456,6 @@ public final class OzoneConsts {
   public static final String SCM_DUMMY_NODEID = "scmNodeId";
   public static final String SCM_DUMMY_SERVICE_ID = "scmServiceId";
 
-  // CRL Sequence Id
-  public static final String CRL_SEQUENCE_ID_KEY = "CRL_SEQUENCE_ID";
-
   public static final String SCM_CA_PATH = "ca";
   public static final String SCM_CA_CERT_STORAGE_DIR = "scm";
   public static final String SCM_SUB_CA_PATH = "sub-ca";
@@ -479,8 +463,11 @@ public final class OzoneConsts {
   public static final String SCM_ROOT_CA_COMPONENT_NAME =
       Paths.get(SCM_CA_CERT_STORAGE_DIR, SCM_CA_PATH).toString();
 
-  public static final String SCM_SUB_CA_PREFIX = "scm-sub@";
-  public static final String SCM_ROOT_CA_PREFIX = "scm@";
+  // %s to distinguish different certificates
+  public static final String SCM_SUB_CA = "scm-sub";
+  public static final String SCM_SUB_CA_PREFIX = SCM_SUB_CA + "@";
+  public static final String SCM_ROOT_CA = "scm";
+  public static final String SCM_ROOT_CA_PREFIX = SCM_ROOT_CA + "@";
 
   // Layout Version written into Meta Table ONLY during finalization.
   public static final String LAYOUT_VERSION_KEY = "#LAYOUTVERSION";
@@ -580,8 +567,6 @@ public final class OzoneConsts {
   public static final String OM_SNAPSHOT_INDICATOR = ".snapshot";
   public static final String OM_SNAPSHOT_DIFF_DB_NAME = "db.snapdiff";
 
-  public static final String FILTERED_SNAPSHOTS = "filtered-snapshots";
-
   /**
    * Name of the SST file backup directory placed under metadata dir.
    * Can be made configurable later.
@@ -600,4 +585,14 @@ public final class OzoneConsts {
    */
   public static final String SNAPSHOT_INFO_TABLE = "snapshotInfoTable";
 
+  /**
+   * DB compaction log table name. Referenced in RDBStore.
+   */
+  public static final String COMPACTION_LOG_TABLE =
+      "compactionLogTable";
+
+  /**
+   * S3G multipart upload request's ETag header key.
+   */
+  public static final String ETAG = "ETag";
 }

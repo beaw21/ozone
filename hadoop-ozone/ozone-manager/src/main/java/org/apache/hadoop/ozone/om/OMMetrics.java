@@ -26,6 +26,7 @@ import org.apache.hadoop.metrics2.annotation.Metric;
 import org.apache.hadoop.metrics2.annotation.Metrics;
 import org.apache.hadoop.metrics2.lib.DefaultMetricsSystem;
 import org.apache.hadoop.metrics2.lib.MutableCounterLong;
+import org.apache.hadoop.metrics2.lib.MutableGaugeInt;
 
 /**
  * This class is for maintaining Ozone Manager statistics.
@@ -72,12 +73,18 @@ public class OMMetrics implements OmMetadataReaderMetrics {
   private @Metric MutableCounterLong numSnapshotCreates;
   private @Metric MutableCounterLong numSnapshotDeletes;
   private @Metric MutableCounterLong numSnapshotLists;
+  private @Metric MutableCounterLong numSnapshotDiffJobs;
+  private @Metric MutableCounterLong numSnapshotInfos;
+  private @Metric MutableCounterLong numSnapshotPurges;
+  private @Metric MutableCounterLong numSnapshotSetProperties;
 
+  private @Metric MutableGaugeInt numSnapshotCacheSize;
   private @Metric MutableCounterLong numGetFileStatus;
   private @Metric MutableCounterLong numCreateDirectory;
   private @Metric MutableCounterLong numCreateFile;
   private @Metric MutableCounterLong numLookupFile;
   private @Metric MutableCounterLong numListStatus;
+  private @Metric MutableCounterLong numListOpenFiles;
 
   private @Metric MutableCounterLong numOpenKeyDeleteRequests;
   private @Metric MutableCounterLong numOpenKeysSubmittedForDeletion;
@@ -85,10 +92,16 @@ public class OMMetrics implements OmMetadataReaderMetrics {
   private @Metric MutableCounterLong numOpenKeysCleaned;
   private @Metric MutableCounterLong numOpenKeysHSyncCleaned;
 
+  private @Metric MutableCounterLong numExpiredMPUAbortRequests;
+  private @Metric MutableCounterLong numExpiredMPUSubmittedForAbort;
+  private @Metric MutableCounterLong numExpiredMPUAborted;
+  private @Metric MutableCounterLong numExpiredMPUPartsAborted;
+
   private @Metric MutableCounterLong numAddAcl;
   private @Metric MutableCounterLong numSetAcl;
   private @Metric MutableCounterLong numGetAcl;
   private @Metric MutableCounterLong numRemoveAcl;
+  private @Metric MutableCounterLong numSetTime;
   private @Metric MutableCounterLong numGetKeyInfo;
 
   // Failure Metrics
@@ -122,12 +135,17 @@ public class OMMetrics implements OmMetadataReaderMetrics {
   private @Metric MutableCounterLong numListMultipartUploadParts;
   private @Metric MutableCounterLong numListMultipartUploadPartFails;
   private @Metric MutableCounterLong numOpenKeyDeleteRequestFails;
+  private @Metric MutableCounterLong numExpiredMPUAbortRequestFails;
   private @Metric MutableCounterLong numSnapshotCreateFails;
   private @Metric MutableCounterLong numSnapshotDeleteFails;
   private @Metric MutableCounterLong numSnapshotListFails;
+  private @Metric MutableCounterLong numSnapshotDiffJobFails;
+  private @Metric MutableCounterLong numSnapshotInfoFails;
+  private @Metric MutableCounterLong numSnapshotPurgeFails;
+  private @Metric MutableCounterLong numSnapshotSetPropertyFails;
+
   private @Metric MutableCounterLong numSnapshotActive;
   private @Metric MutableCounterLong numSnapshotDeleted;
-  private @Metric MutableCounterLong numSnapshotReclaimed;
 
   // Number of tenant operations attempted
   private @Metric MutableCounterLong numTenantOps;
@@ -165,6 +183,7 @@ public class OMMetrics implements OmMetadataReaderMetrics {
   private @Metric MutableCounterLong numCreateFileFails;
   private @Metric MutableCounterLong numLookupFileFails;
   private @Metric MutableCounterLong numListStatusFails;
+  private @Metric MutableCounterLong numListOpenFilesFails;
   private @Metric MutableCounterLong getNumGetKeyInfoFails;
 
   private @Metric MutableCounterLong numRecoverLeaseFails;
@@ -417,8 +436,16 @@ public class OMMetrics implements OmMetadataReaderMetrics {
   }
 
   public void incNumListS3BucketsFails() {
-    numBucketOps.incr();
     numBucketS3ListFails.incr();
+  }
+
+  public void incNumListOpenFiles() {
+    numKeyOps.incr();
+    numListOpenFiles.incr();
+  }
+
+  public void incNumListOpenFilesFails() {
+    numListOpenFilesFails.incr();
   }
 
   public void incNumInitiateMultipartUploads() {
@@ -464,8 +491,40 @@ public class OMMetrics implements OmMetadataReaderMetrics {
     numSnapshotLists.incr();
   }
 
+  public void incNumSnapshotInfos() {
+    numSnapshotInfos.incr();
+  }
+
+  public void incNumSnapshotPurges() {
+    numSnapshotPurges.incr();
+  }
+
+  public void incNumSnapshotSetProperties() {
+    numSnapshotSetProperties.incr();
+  }
+
+  public void incNumSnapshotDiffJobs() {
+    numSnapshotDiffJobs.incr();
+  }
+
   public void incNumSnapshotListFails() {
     numSnapshotListFails.incr();
+  }
+
+  public void incNumSnapshotDiffJobFails() {
+    numSnapshotDiffJobFails.incr();
+  }
+
+  public void incNumSnapshotInfoFails() {
+    numSnapshotInfoFails.incr();
+  }
+
+  public void incNumSnapshotPurgeFails() {
+    numSnapshotPurgeFails.incr();
+  }
+
+  public void incNumSnapshotSetPropertyFails() {
+    numSnapshotSetPropertyFails.incr();
   }
 
   public void setNumSnapshotActive(long num) {
@@ -494,17 +553,15 @@ public class OMMetrics implements OmMetadataReaderMetrics {
     numSnapshotDeleted.incr(-1);
   }
 
-  public void setNumSnapshotReclaimed(long num) {
-    long currVal = numSnapshotReclaimed.value();
-    numSnapshotReclaimed.incr(num - currVal);
+  public int getNumSnapshotCacheSize() {
+    return numSnapshotCacheSize.value();
+  }
+  public void incNumSnapshotCacheSize() {
+    numSnapshotCacheSize.incr();
   }
 
-  public void incNumSnapshotReclaimed() {
-    numSnapshotReclaimed.incr();
-  }
-
-  public void decNumSnapshotReclaimed() {
-    numSnapshotReclaimed.incr(-1);
+  public void decNumSnapshotCacheSize() {
+    numSnapshotCacheSize.decr();
   }
 
   public void incNumCompleteMultipartUploadFails() {
@@ -815,6 +872,26 @@ public class OMMetrics implements OmMetadataReaderMetrics {
     numOpenKeyDeleteRequestFails.incr();
   }
 
+  public void incNumExpiredMPUAbortRequests() {
+    numExpiredMPUAbortRequests.incr();
+  }
+
+  public void incNumExpiredMPUSubmittedForAbort(long amount) {
+    numExpiredMPUSubmittedForAbort.incr(amount);
+  }
+
+  public void incNumExpiredMPUAborted() {
+    numExpiredMPUAborted.incr();
+  }
+
+  public void incNumExpiredMPUPartsAborted(long amount) {
+    numExpiredMPUPartsAborted.incr(amount);
+  }
+
+  public void incNumExpiredMpuAbortRequestFails() {
+    numExpiredMPUAbortRequestFails.incr();
+  }
+
   public void incNumAddAcl() {
     numAddAcl.incr();
   }
@@ -830,6 +907,10 @@ public class OMMetrics implements OmMetadataReaderMetrics {
 
   public void incNumRemoveAcl() {
     numRemoveAcl.incr();
+  }
+
+  public void incNumSetTime() {
+    numSetTime.incr();
   }
 
   @Override
@@ -1054,6 +1135,11 @@ public class OMMetrics implements OmMetadataReaderMetrics {
   }
 
   @VisibleForTesting
+  public void resetNumKeyHSyncs() {
+    numKeyHSyncs.incr(-numKeyHSyncs.value());
+  }
+
+  @VisibleForTesting
   public long getNumKeyCommitFails() {
     return numKeyCommitFails.value();
   }
@@ -1126,6 +1212,31 @@ public class OMMetrics implements OmMetadataReaderMetrics {
 
   public long getNumOpenKeyDeleteRequestFails() {
     return numOpenKeyDeleteRequestFails.value();
+  }
+
+  @VisibleForTesting
+  public long getNumExpiredMPUAbortRequests() {
+    return numExpiredMPUAbortRequests.value();
+  }
+
+  @VisibleForTesting
+  public long getNumExpiredMPUSubmittedForAbort() {
+    return numExpiredMPUSubmittedForAbort.value();
+  }
+
+  @VisibleForTesting
+  public long getNumExpiredMPUAborted() {
+    return numExpiredMPUAborted.value();
+  }
+
+  @VisibleForTesting
+  public long getNumExpiredMPUAbortRequestFails() {
+    return numExpiredMPUAbortRequestFails.value();
+  }
+
+  @VisibleForTesting
+  public long getNumExpiredMPUPartsAborted() {
+    return numExpiredMPUPartsAborted.value();
   }
 
   public long getNumAddAcl() {
@@ -1216,16 +1327,40 @@ public class OMMetrics implements OmMetadataReaderMetrics {
     return numSnapshotCreates.value();
   }
 
+  public long getNumSnapshotDeletes() {
+    return numSnapshotDeletes.value();
+  }
+
   public long getNumSnapshotLists() {
     return numSnapshotLists.value();
+  }
+
+  public long getNumSnapshotDiffJobs() {
+    return numSnapshotDiffJobs.value();
+  }
+
+  public long getNumSnapshotPurges() {
+    return numSnapshotPurges.value();
+  }
+
+  public long getNumSnapshotSetProperties() {
+    return numSnapshotSetProperties.value();
   }
 
   public long getNumSnapshotCreateFails() {
     return numSnapshotCreateFails.value();
   }
 
+  public long getNumSnapshotDeleteFails() {
+    return numSnapshotDeleteFails.value();
+  }
+
   public long getNumSnapshotListFails() {
     return numSnapshotListFails.value();
+  }
+
+  public long getNumSnapshotDiffJobFails() {
+    return numSnapshotDiffJobFails.value();
   }
 
   public long getNumSnapshotActive() {
@@ -1236,10 +1371,13 @@ public class OMMetrics implements OmMetadataReaderMetrics {
     return numSnapshotDeleted.value();
   }
 
-  public long getNumSnapshotReclaimed() {
-    return numSnapshotReclaimed.value();
+  public long getNumSnapshotPurgeFails() {
+    return numSnapshotPurgeFails.value();
   }
 
+  public long getNumSnapshotSetPropertyFails() {
+    return numSnapshotSetPropertyFails.value();
+  }
 
   public void incNumTrashRenames() {
     numTrashRenames.incr();

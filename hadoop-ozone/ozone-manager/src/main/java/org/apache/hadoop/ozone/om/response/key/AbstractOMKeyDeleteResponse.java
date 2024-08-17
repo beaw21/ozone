@@ -31,8 +31,8 @@ import org.apache.hadoop.ozone.protocol.proto.OzoneManagerProtocolProtos
 import org.apache.hadoop.hdds.utils.db.BatchOperation;
 
 import java.io.IOException;
-import javax.annotation.Nullable;
-import javax.annotation.Nonnull;
+import jakarta.annotation.Nullable;
+import jakarta.annotation.Nonnull;
 
 import static org.apache.hadoop.ozone.om.OmMetadataManagerImpl.DELETED_TABLE;
 
@@ -99,7 +99,7 @@ public abstract class AbstractOMKeyDeleteResponse extends OmKeyResponse {
       // if it is not null, then we simply add to the list and store this
       // instance in deletedTable.
       RepeatedOmKeyInfo repeatedOmKeyInfo = OmUtils.prepareKeyForDelete(
-          omKeyInfo, null, omKeyInfo.getUpdateID(),
+          omKeyInfo, omKeyInfo.getUpdateID(),
           isRatisEnabled);
       String delKeyName = omMetadataManager.getOzoneDeletePathKey(
           omKeyInfo.getObjectID(), keyName);
@@ -142,7 +142,7 @@ public abstract class AbstractOMKeyDeleteResponse extends OmKeyResponse {
       // if it is not null, then we simply add to the list and store this
       // instance in deletedTable.
       RepeatedOmKeyInfo repeatedOmKeyInfo = OmUtils.prepareKeyForDelete(
-          omKeyInfo, null, omKeyInfo.getUpdateID(),
+          omKeyInfo, omKeyInfo.getUpdateID(),
           isRatisEnabled);
       omMetadataManager.getDeletedTable().putWithBatch(
           batchOperation, deleteKeyName, repeatedOmKeyInfo);

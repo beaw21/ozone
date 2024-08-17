@@ -174,7 +174,9 @@ the configuration keys `ozone.server.default.replication.type` and `ozone.server
    <name>ozone.server.default.replication.type</name>
    <value>EC</value>
 </property>
+```
 
+```XML
 <property>
    <name>ozone.server.default.replication</name>
    <value>RS-6-3-1024k</value>
@@ -208,5 +210,43 @@ We can pass the EC Replication Config while creating the keys irrespective of bu
 ozone sh key put <Ozone Key Object Path> <Local File> --type EC --replication rs-6-3-1024k
 ```
 
+When using ofs/o3fs, we can pass the EC Replication Config by setting the configuration keys `ozone.replication.type` and `ozone.replication`.
+
+```XML
+<property>
+   <name>ozone.replication.type</name>
+   <value>EC</value>
+</property>
+```
+
+```XML
+<property>
+   <name>ozone.replication</name>
+   <value>rs-3-2-1024k</value>
+</property>
+```
+
 In the case bucket already has default EC Replication Config, there is no need of passing EC Replication Config while creating key.
+
+### Enable Intel ISA-L
+
+Intel Intelligent Storage Acceleration Library (ISA-L) is an open-source collection of optimized low-level functions used for
+storage applications. Enabling ISA-L allows significantly improve EC performance.
+
+#### Prerequisites
+
+To enable ISA-L you will also require Hadoop native libraries (libhadoop.so). 
+
+#### Installation
+Both libraries should be placed to the directory specified by the java.library.path property or set by  `LD_LIBRARY_PATH` environment variable.
+The default value of java.library.path depends on the OS and Java version. For example, on Linux with OpenJDK 8 it is `/usr/java/packages/lib/amd64:/usr/lib64:/lib64:/lib:/usr/lib`.
+
+#### Verification
+
+You can check if ISA-L is accessible to Ozone by running the following command:
+
+```shell
+ozone checknative
+```
+
 

@@ -40,6 +40,8 @@ public class BlockLocationInfo {
 
   // PartNumber is set for Multipart upload Keys.
   private int partNumber;
+  // The block is under construction. Apply to hsynced file last block.
+  private boolean underConstruction;
 
   protected BlockLocationInfo(Builder builder) {
     this.blockID = builder.blockID;
@@ -111,6 +113,14 @@ public class BlockLocationInfo {
     return partNumber;
   }
 
+  public void setUnderConstruction(boolean uc) {
+    this.underConstruction = uc;
+  }
+
+  public boolean isUnderConstruction() {
+    return this.underConstruction;
+  }
+
   /**
    * Builder of BlockLocationInfo.
    */
@@ -164,9 +174,8 @@ public class BlockLocationInfo {
   }
 
   @Override
-  public String  toString() {
-    return "{blockID={containerID=" + blockID.getContainerID() +
-        ", localID=" + blockID.getLocalID() + "}" +
+  public String toString() {
+    return "{blockID={" + blockID + "}" +
         ", length=" + length +
         ", offset=" + offset +
         ", token=" + token +
@@ -174,6 +183,20 @@ public class BlockLocationInfo {
         ", createVersion=" + createVersion +
         ", partNumber=" + partNumber
         + '}';
+  }
+
+  public boolean hasSameBlockAs(Object o) {
+    if (this == o) {
+      return true;
+    }
+    if (o == null || getClass() != o.getClass()) {
+      return false;
+    }
+    BlockLocationInfo that = (BlockLocationInfo) o;
+    return length == that.length &&
+        offset == that.offset &&
+        createVersion == that.createVersion &&
+        Objects.equals(blockID, that.blockID);
   }
 
   @Override

@@ -83,6 +83,7 @@ run mkdir -p ./tests
 run cp -r "${ROOT}/hadoop-hdds/common/src/main/conf/" "etc/hadoop"
 run cp "${ROOT}/hadoop-ozone/dist/src/shell/conf/om-audit-log4j2.properties" "etc/hadoop"
 run cp "${ROOT}/hadoop-ozone/dist/src/shell/conf/dn-audit-log4j2.properties" "etc/hadoop"
+run cp "${ROOT}/hadoop-ozone/dist/src/shell/conf/dn-container-log4j2.properties" "etc/hadoop"
 run cp "${ROOT}/hadoop-ozone/dist/src/shell/conf/scm-audit-log4j2.properties" "etc/hadoop"
 run cp "${ROOT}/hadoop-ozone/dist/src/shell/conf/s3g-audit-log4j2.properties" "etc/hadoop"
 run cp "${ROOT}/hadoop-ozone/dist/src/shell/conf/ozone-site.xml" "etc/hadoop"
@@ -111,6 +112,9 @@ run cp  -r "${ROOT}/hadoop-ozone/fault-injection-test/network-tests/src/test/blo
 
 # Optional documentation, could be missing
 cp -r "${ROOT}/hadoop-hdds/docs/target/classes/docs" ./
+
+# BOM is created only when using 'dist' profile
+cp -p "${ROOT}"/target/bom.* ./
 
 #copy byteman helpers
 run cp -r "${ROOT}/dev-support/byteman" "share/ozone/"

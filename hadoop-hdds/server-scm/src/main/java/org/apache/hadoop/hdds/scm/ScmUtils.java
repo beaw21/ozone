@@ -23,21 +23,20 @@ import java.util.List;
 import java.util.concurrent.BlockingQueue;
 import org.apache.hadoop.hdds.conf.ConfigurationSource;
 import org.apache.hadoop.hdds.conf.OzoneConfiguration;
-import org.apache.hadoop.hdds.protocol.proto.HddsProtos.ScmOps;
 import org.apache.hadoop.hdds.scm.events.SCMEvents;
 import org.apache.hadoop.hdds.scm.exceptions.SCMException;
-import org.apache.hadoop.hdds.scm.safemode.Precheck;
 
+import org.apache.hadoop.hdds.scm.security.RootCARotationManager;
 import org.apache.hadoop.hdds.scm.server.ContainerReportQueue;
 import org.apache.hadoop.hdds.scm.server.SCMDatanodeHeartbeatDispatcher.ContainerReport;
+import org.apache.hadoop.hdds.security.SecurityConfig;
 import org.apache.hadoop.net.NetUtils;
 import org.apache.hadoop.ozone.ha.ConfUtils;
 import org.apache.hadoop.util.StringUtils;
-import org.jetbrains.annotations.NotNull;
+import jakarta.annotation.Nonnull;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import java.io.File;
 import java.net.InetSocketAddress;
 import java.util.Optional;
 import java.util.OptionalInt;
@@ -71,30 +70,6 @@ public final class ScmUtils {
       .getLogger(ScmUtils.class);
 
   private ScmUtils() {
-  }
-
-  /**
-   * Perform all prechecks for given scm operation.
-   *
-   * @param operation
-   * @param preChecks prechecks to be performed
-   */
-  public static void preCheck(ScmOps operation, Precheck... preChecks)
-      throws SCMException {
-    for (Precheck preCheck : preChecks) {
-      preCheck.check(operation);
-    }
-  }
-
-  /**
-   * Create SCM directory file based on given path.
-   */
-  public static File createSCMDir(String dirPath) {
-    File dirFile = new File(dirPath);
-    if (!dirFile.mkdirs() && !dirFile.exists()) {
-      throw new IllegalArgumentException("Unable to create path: " + dirFile);
-    }
-    return dirFile;
   }
 
   public static InetSocketAddress getScmBlockProtocolServerAddress(
@@ -202,7 +177,7 @@ public final class ScmUtils {
             ScmConfigKeys.OZONE_SCM_DATANODE_DISALLOW_SAME_PEERS_DEFAULT));
   }
 
-  @NotNull
+  @Nonnull
   public static List<BlockingQueue<ContainerReport>> initContainerReportQueue(
       OzoneConfiguration configuration) {
     int threadPoolSize = configuration.getInt(getContainerReportConfPrefix()
@@ -225,4 +200,25 @@ public final class ScmUtils {
             + SCMEvents.INCREMENTAL_CONTAINER_REPORT.getName());
   }
 
+  public static void checkIfCertSignRequestAllowed(
+      RootCARotationManager rotationManager, boolean isScmCertRenew,
+      OzoneConfiguration config, String operation) throws SCMException {
+    if (rotationManager != null) {
+      if (rotationManager.isRotationInProgress() && !isScmCertRenew) {
+        throw new SCMException("Root CA and Sub CA rotation is in-progress." +
+            " Please try the operation later again.",
+            SCMException.ResultCodes.CA_ROTATION_IN_PROGRESS);
+      }
+      if (rotationManager.isPostRotationInProgress()) {
+        SecurityConfig securityConfig = new SecurityConfig(config);
+        throw new SCMException("The operation " + operation +
+            " is prohibited due to root CA " +
+            "and sub CA rotation have just finished. " +
+            "The prohibition state will last at most " +
+            securityConfig.getRootCaCertificatePollingInterval() + ". " +
+            "Please try the operation later again.",
+            SCMException.ResultCodes.CA_ROTATION_IN_POST_PROGRESS);
+      }
+    }
+  }
 }

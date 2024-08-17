@@ -31,7 +31,7 @@ Ozone Manager (OM) is the namespace manager for Ozone.
 This means that when you want to write some data, you ask Ozone
 Manager for a block and Ozone Manager gives you a block and remembers that
 information. When you want to read that file back, you need to find the
-address of the block and Ozone Manager returns it you.
+address of the block and the Ozone Manager returns it to you.
 
 Ozone Manager also allows users to organize keys under a volume and bucket.
 Volumes and buckets are part of the namespace and managed by Ozone Manager.
@@ -133,7 +133,7 @@ The following data is persisted in Ozone Manager side in a specific RocksDB dire
  * Multipart info table
    * Inflight uploads should be tracked
  * Deleted table
-  * To track the blocks which should be deleted from the datanodes
+   * To track the blocks which should be deleted from the datanodes
 
 ## Notable configurations
 

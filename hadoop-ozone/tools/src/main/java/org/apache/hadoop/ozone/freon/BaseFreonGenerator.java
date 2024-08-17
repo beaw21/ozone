@@ -97,7 +97,7 @@ public class BaseFreonGenerator {
   @Option(names = {"-t", "--threads", "--thread"},
       description = "Number of threads used to execute",
       defaultValue = "10")
-  private int threadNo;
+  private int threadNo = 10;
 
   @Option(names = {"--duration"},
       description = "Duration to run the test. "
@@ -245,7 +245,7 @@ public class BaseFreonGenerator {
   }
 
   private void shutdown() {
-    if (failureCounter.get() > 0) {
+    if (!failAtEnd) {
       progressBar.terminate();
     } else {
       progressBar.shutdown();
@@ -265,7 +265,7 @@ public class BaseFreonGenerator {
    */
   private void reportAnyFailure() {
     if (failureCounter.get() > 0) {
-      throw new RuntimeException("One ore more freon test is failed.");
+      throw new RuntimeException("One or more freon test is failed.");
     }
   }
 
@@ -273,6 +273,10 @@ public class BaseFreonGenerator {
    * Initialize internal counters, and variables. Call it before runTests.
    */
   public void init() {
+    // run outside of picocli, e.g. unit tests
+    if (freonCommand == null) {
+      freonCommand = new Freon();
+    }
 
     freonCommand.startHttpServer();
 
@@ -281,7 +285,7 @@ public class BaseFreonGenerator {
     attemptCounter = new AtomicLong(0);
 
     if (prefix.length() == 0) {
-      prefix = RandomStringUtils.randomAlphanumeric(10).toLowerCase();
+      prefix = !allowEmptyPrefix() ? RandomStringUtils.randomAlphanumeric(10).toLowerCase() : "";
     } else {
       //replace environment variables to support multi-node execution
       prefix = resolvePrefix(prefix);
@@ -302,8 +306,8 @@ public class BaseFreonGenerator {
               "Invalid command, "
                       + "the testNo must be a positive integer");
     }
-    LOG.info("Executing test with prefix {} " +
-        "and number-of-tests {}", prefix, testNo);
+    LOG.info("Executing test with prefix {} and number-of-tests {}",
+        prefix.isEmpty() ? "''" : prefix, testNo);
 
     pathSchema = new PathSchema(prefix);
 
@@ -329,7 +333,7 @@ public class BaseFreonGenerator {
           Instant.ofEpochMilli(startTime), Instant.now()).getSeconds();
     } else {
       maxValue = testNo;
-      supplier = successCounter::get;
+      supplier = () -> successCounter.get() + failureCounter.get();
     }
     progressBar = new ProgressBar(System.out, maxValue, supplier,
         freonCommand.isInteractive(), realTimeStatusSupplier());
@@ -537,6 +541,15 @@ public class BaseFreonGenerator {
     return dig.digest(stream);
   }
 
+  /**
+   * When no prefix is specified,
+   * if allowEmptyPrefix is false, a random prefix will be used;
+   * if allowEmptyPrefix is true, an empty prefix will be used.
+   */
+  public boolean allowEmptyPrefix() {
+    return false;
+  }
+
   public String getPrefix() {
     return prefix;
   }
@@ -557,8 +570,20 @@ public class BaseFreonGenerator {
     void executeNextTask(long step) throws Exception;
   }
 
-  public AtomicLong getAttemptCounter() {
-    return attemptCounter;
+  public long getAttemptCount() {
+    return attemptCounter.get();
+  }
+
+  public long getSuccessCount() {
+    return successCounter.get();
+  }
+
+  public long getFailureCount() {
+    return failureCounter.get();
+  }
+
+  public boolean isCompleted() {
+    return completed.get();
   }
 
   public int getThreadNo() {

@@ -20,67 +20,87 @@ package org.apache.hadoop.ozone.container.metadata;
 import org.apache.hadoop.hdds.conf.ConfigurationSource;
 import org.apache.hadoop.hdds.protocol.proto.StorageContainerDatanodeProtocolProtos;
 import org.apache.hadoop.hdds.utils.db.DBColumnFamilyDefinition;
+import org.apache.hadoop.hdds.utils.db.DBDefinition;
+import org.apache.hadoop.hdds.utils.db.FixedLengthStringCodec;
 import org.apache.hadoop.hdds.utils.db.LongCodec;
+import org.apache.hadoop.hdds.utils.db.Proto2Codec;
 import org.apache.hadoop.hdds.utils.db.StringCodec;
 import org.apache.hadoop.ozone.container.common.helpers.BlockData;
-import org.apache.hadoop.ozone.container.common.helpers.ChunkInfoList;
 import org.apache.hadoop.hdds.protocol.proto
     .StorageContainerDatanodeProtocolProtos.DeletedBlocksTransaction;
+
+import java.util.Map;
 
 /**
  * This class defines the RocksDB structure for datanodes following schema
  * version 2, where the block data, metadata, and transactions which are to be
  * deleted are put in their own separate column families.
  */
-public class DatanodeSchemaTwoDBDefinition extends
-        AbstractDatanodeDBDefinition {
+public class DatanodeSchemaTwoDBDefinition
+    extends AbstractDatanodeDBDefinition
+    implements DBDefinition.WithMapInterface {
 
   public static final DBColumnFamilyDefinition<String, BlockData>
           BLOCK_DATA =
           new DBColumnFamilyDefinition<>(
                   "block_data",
                   String.class,
-                  new StringCodec(),
+                  StringCodec.get(),
                   BlockData.class,
-                  new BlockDataCodec());
+                  BlockData.getCodec());
 
   public static final DBColumnFamilyDefinition<String, Long>
           METADATA =
           new DBColumnFamilyDefinition<>(
           "metadata",
           String.class,
-          new StringCodec(),
+          StringCodec.get(),
           Long.class,
-          new LongCodec());
-
-  public static final DBColumnFamilyDefinition<String, ChunkInfoList>
-          DELETED_BLOCKS =
-          new DBColumnFamilyDefinition<>(
-                  "deleted_blocks",
-                  String.class,
-                  new StringCodec(),
-                  ChunkInfoList.class,
-                  new ChunkInfoListCodec());
+          LongCodec.get());
 
   public static final DBColumnFamilyDefinition<Long, DeletedBlocksTransaction>
       DELETE_TRANSACTION =
       new DBColumnFamilyDefinition<>(
           "delete_txns",
           Long.class,
-          new LongCodec(),
+          LongCodec.get(),
           StorageContainerDatanodeProtocolProtos.DeletedBlocksTransaction.class,
-          new DeletedBlocksTransactionCodec());
+          Proto2Codec.get(DeletedBlocksTransaction.getDefaultInstance()));
+
+  public static final DBColumnFamilyDefinition<String, Long>
+      FINALIZE_BLOCKS =
+      new DBColumnFamilyDefinition<>(
+          "finalize_blocks",
+          String.class,
+          FixedLengthStringCodec.get(),
+          Long.class,
+          LongCodec.get());
+
+  public static final DBColumnFamilyDefinition<String, BlockData>
+      LAST_CHUNK_INFO =
+      new DBColumnFamilyDefinition<>(
+          "last_chunk_info",
+          String.class,
+          FixedLengthStringCodec.get(),
+          BlockData.class,
+          BlockData.getCodec());
 
   public DatanodeSchemaTwoDBDefinition(String dbPath,
       ConfigurationSource config) {
     super(dbPath, config);
   }
 
+  private static final Map<String, DBColumnFamilyDefinition<?, ?>>
+      COLUMN_FAMILIES = DBColumnFamilyDefinition.newUnmodifiableMap(
+          BLOCK_DATA,
+          METADATA,
+          DELETE_TRANSACTION,
+          FINALIZE_BLOCKS,
+          LAST_CHUNK_INFO);
+
   @Override
-  public DBColumnFamilyDefinition[] getColumnFamilies() {
-    return new DBColumnFamilyDefinition[] {getBlockDataColumnFamily(),
-        getMetadataColumnFamily(), getDeletedBlocksColumnFamily(),
-        getDeleteTransactionsColumnFamily()};
+  public Map<String, DBColumnFamilyDefinition<?, ?>> getMap() {
+    return COLUMN_FAMILIES;
   }
 
   @Override
@@ -95,13 +115,17 @@ public class DatanodeSchemaTwoDBDefinition extends
   }
 
   @Override
-  public DBColumnFamilyDefinition<String, ChunkInfoList>
-      getDeletedBlocksColumnFamily() {
-    return DELETED_BLOCKS;
+  public DBColumnFamilyDefinition<String, BlockData>
+      getLastChunkInfoColumnFamily() {
+    return LAST_CHUNK_INFO;
   }
 
   public DBColumnFamilyDefinition<Long, DeletedBlocksTransaction>
       getDeleteTransactionsColumnFamily() {
     return DELETE_TRANSACTION;
+  }
+
+  public DBColumnFamilyDefinition<String, Long> getFinalizeBlocksColumnFamily() {
+    return FINALIZE_BLOCKS;
   }
 }

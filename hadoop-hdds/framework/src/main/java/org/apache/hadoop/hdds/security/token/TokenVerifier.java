@@ -22,9 +22,9 @@ import com.google.common.base.Strings;
 import org.apache.hadoop.hdds.annotation.InterfaceAudience;
 import org.apache.hadoop.hdds.annotation.InterfaceStability;
 import org.apache.hadoop.hdds.protocol.datanode.proto.ContainerProtos.ContainerCommandRequestProtoOrBuilder;
+import org.apache.hadoop.hdds.security.SecurityConfig;
 import org.apache.hadoop.hdds.security.exception.SCMSecurityException;
-import org.apache.hadoop.hdds.security.x509.SecurityConfig;
-import org.apache.hadoop.hdds.security.x509.certificate.client.CertificateClient;
+import org.apache.hadoop.hdds.security.symmetric.SecretKeyVerifierClient;
 import org.apache.hadoop.security.token.Token;
 
 import java.io.IOException;
@@ -42,18 +42,17 @@ public interface TokenVerifier {
    * Verify if {@code token} is valid to allow execution of {@code cmd} for
    * {@code user}.
    *
-   * @param user user of the request
    * @param token the token to verify
    * @param cmd container command
    * @throws SCMSecurityException if token verification fails.
    */
-  void verify(String user, Token<?> token,
+  void verify(Token<?> token,
       ContainerCommandRequestProtoOrBuilder cmd)
       throws SCMSecurityException;
 
-  /** Same as {@link #verify(String, Token,
+  /** Same as {@link #verify(Token,
    * ContainerCommandRequestProtoOrBuilder)}, but with encoded token. */
-  default void verify(ContainerCommandRequestProtoOrBuilder cmd, String user,
+  default void verify(ContainerCommandRequestProtoOrBuilder cmd,
       String encodedToken) throws SCMSecurityException {
 
     if (Strings.isNullOrEmpty(encodedToken)) {
@@ -68,20 +67,19 @@ public interface TokenVerifier {
       throw new BlockTokenException("Failed to decode token : " + encodedToken);
     }
 
-    verify(user, token, cmd);
+    verify(token, cmd);
   }
 
   /** Create appropriate token verifier based on the configuration. */
   static TokenVerifier create(SecurityConfig conf,
-      CertificateClient certClient) {
-
+      SecretKeyVerifierClient secretKeyClient) throws IOException {
     if (!conf.isBlockTokenEnabled() && !conf.isContainerTokenEnabled()) {
       return new NoopTokenVerifier();
     }
 
     List<TokenVerifier> list = new LinkedList<>();
-    list.add(new BlockTokenVerifier(conf, certClient));
-    list.add(new ContainerTokenVerifier(conf, certClient));
+    list.add(new BlockTokenVerifier(conf, secretKeyClient));
+    list.add(new ContainerTokenVerifier(conf, secretKeyClient));
     return new CompositeTokenVerifier(list);
   }
 }

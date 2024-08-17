@@ -19,9 +19,6 @@ package org.apache.hadoop.ozone.lease;
 
 import org.apache.hadoop.util.Time;
 
-import java.util.ArrayList;
-import java.util.Collections;
-import java.util.List;
 import java.util.Objects;
 import java.util.concurrent.Callable;
 import java.util.concurrent.atomic.AtomicLong;
@@ -49,9 +46,9 @@ public class Lease<T> {
   private boolean expired;
 
   /**
-   * Functions to be called in case of timeout.
+   * Function to be called in case of timeout.
    */
-  private List<Callable<Void>> callbacks;
+  private Callable<Void> callback;
 
 
   /**
@@ -63,9 +60,23 @@ public class Lease<T> {
    *        Lease lifetime in milliseconds
    */
   public Lease(T resource, long timeout) {
+    this(resource, timeout, null);
+  }
+
+  /**
+   * Creates a lease on the specified resource with given timeout.
+   *
+   * @param resource
+   *        Resource for which the lease has to be created
+   * @param timeout
+   *        Lease lifetime in milliseconds
+   * @param callback
+   *        Callback registered to be triggered when lease expire
+   */
+  public Lease(T resource, long timeout, Callable<Void> callback) {
     this.resource = resource;
     this.leaseTimeout = new AtomicLong(timeout);
-    this.callbacks = Collections.synchronizedList(new ArrayList<>());
+    this.callback = callback;
     this.creationTime = Time.monotonicNow();
     this.expired = false;
   }
@@ -77,23 +88,6 @@ public class Lease<T> {
    */
   public boolean hasExpired() {
     return expired;
-  }
-
-  /**
-   * Registers a callback which will be executed in case of timeout. Callbacks
-   * are executed in a separate Thread (by {@link LeaseManager}).
-   *
-   * @param callback
-   *        The Callable which has to be executed
-   * @throws LeaseExpiredException
-   *         If the lease has already timed out
-   */
-  public void registerCallBack(Callable<Void> callback)
-      throws LeaseExpiredException {
-    if (hasExpired()) {
-      throw new LeaseExpiredException(messageForResource(resource));
-    }
-    callbacks.add(callback);
   }
 
   /**
@@ -178,15 +172,15 @@ public class Lease<T> {
    *
    * @return callbacks to be executed
    */
-  List<Callable<Void>> getCallbacks() {
-    return callbacks;
+  Callable<Void> getCallback() {
+    return callback;
   }
 
   /**
    * Expires/Invalidates the lease.
    */
   void invalidate() {
-    callbacks = null;
+    callback = null;
     expired = true;
   }
 

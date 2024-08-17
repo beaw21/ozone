@@ -23,8 +23,9 @@ summary: Recon server supports HTTP endpoints to help troubleshoot and monitor O
   limitations under the License.
 -->
 
-The Recon API v1 is a set of HTTP endpoints that help you understand the current 
-state of an Ozone cluster and to troubleshoot if needed.
+The Recon API v1 offers a collection of HTTP endpoints designed to provide insights into the current state of an Ozone cluster, 
+facilitating monitoring, management, and troubleshooting. These endpoints allow administrators to access critical cluster 
+metadata, container status, key management, and more.
 
 Endpoints that are marked as *admin only* can only be accessed by Kerberos users
 specified in the **ozone.administrators** or **ozone.recon.administrators**
@@ -36,6 +37,8 @@ Property|Value
 ozone.security.enabled| *true*
 ozone.security.http.kerberos.enabled| *true*
 ozone.acl.enabled| *true*
+
+Access an interactive version of the API, complete with detailed descriptions and example requests, powered by Swagger [here]({{< relref "./SwaggerReconApi.md" >}})
 
 ## Containers (admin only)
 
@@ -246,6 +249,289 @@ Returns the UnhealthyContainerMetadata objects for all the unhealthycontainers.
 Returns the UnhealthyContainerMetadata objects for the containers in the given state.
 Possible unhealthy container states are `MISSING`, `MIS_REPLICATED`,`UNDER_REPLICATED`, `OVER_REPLICATED`.
 The response structure is same as `/containers/unhealthy`.
+
+
+### GET /api/v1/containers/mismatch
+
+**Returns**
+
+Returns the list of mis-matched containers between OM and SCM
+* Containers are present in OM, but not in SCM.
+* Containers are present in SCM, but not in OM.
+
+```json
+[
+  {
+    "containerId" : 1,
+    "numberOfKeys" : 3,
+    "pipelines" : [
+      "pipelineId" : "1423ghjds832403232",
+      "pipelineId" : "32vds94943fsdh4443",
+      "pipelineId" : "32vds94943fsdhs443"
+    ],
+    "existsAt" : "OM"
+  }
+  ...
+]
+```
+
+### GET /api/v1/containers/mismatch/deleted
+
+
+**Parameters**
+
+* prevKey (optional)
+
+   Returns the set of deleted containers in SCM which are present in OM to find out
+   list of keys mapped to such DELETED state containers after the given prevKey (ContainerId).
+   Example: prevKey=5, skip containers till it seeks correctly to the previous containerId.
+
+* limit (optional)
+
+   Only returns the limited number of results. The default limit is 1000.
+
+**Returns**
+
+Returns the set of deleted containers in SCM which are present in OM to find out
+list of keys mapped to such DELETED state containers.
+
+```json
+[
+  {
+    "containerId": 2,
+    "numberOfKeys": 2,
+    "pipelines": []
+  }
+  ...
+]
+```
+
+### GET /api/v1/keys/open
+
+
+**Parameters**
+
+* prevKey (optional)
+
+    Returns the set of keys/files which are open and present after the given prevKey id.
+    Example: prevKey=/vol1/bucket1/key1, this will skip keys till it seeks correctly to the given prevKey.
+
+* limit (optional)
+
+    Only returns the limited number of results. The default limit is 1000.
+
+**Returns**
+
+Returns set of keys/files which are open.
+
+```json
+{
+  "lastKey": "/vol1/fso-bucket/dir1/dir2/file2",
+  "replicatedTotal": 13824,
+  "unreplicatedTotal": 4608,
+  "entities": [
+    {
+      "path": "/vol1/bucket1/key1",
+      "keyState": "Open",
+      "inStateSince": 1667564193026,
+      "size": 1024,
+      "replicatedSize": 3072,
+      "unreplicatedSize": 1024,
+      "replicationType": "RATIS",
+      "replicationFactor": "THREE"
+    },
+    {
+      "path": "/vol1/bucket1/key2",
+      "keyState": "Open",
+      "inStateSince": 1667564193026,
+      "size": 512,
+      "replicatedSize": 1536,
+      "unreplicatedSize": 512,
+      "replicationType": "RATIS",
+      "replicationFactor": "THREE"
+    },
+    {
+      "path": "/vol1/fso-bucket/dir1/file1",
+      "keyState": "Open",
+      "inStateSince": 1667564193026,
+      "size": 1024,
+      "replicatedSize": 3072,
+      "unreplicatedSize": 1024,
+      "replicationType": "RATIS",
+      "replicationFactor": "THREE"
+    },
+    {
+      "path": "/vol1/fso-bucket/dir1/dir2/file2",
+      "keyState": "Open",
+      "inStateSince": 1667564193026,
+      "size": 2048,
+      "replicatedSize": 6144,
+      "unreplicatedSize": 2048,
+      "replicationType": "RATIS",
+      "replicationFactor": "THREE"
+    }
+  ]
+}
+```
+
+### GET /api/v1/keys/deletePending
+
+
+**Parameters**
+
+* prevKey (optional)
+
+  Returns the set of keys/files pending for deletion that are present after the given prevKey id.
+  Example: prevKey=/vol1/bucket1/key1, this will skip keys till it seeks correctly to the given prevKey.
+
+* limit (optional)
+
+  Only returns the limited number of results. The default limit is 1000.
+
+**Returns**
+
+Returns set of keys/files pending for deletion.
+
+```json
+{
+  "lastKey": "sampleVol/bucketOne/key_one",
+  "replicatedTotal": -1530804718628866300,
+  "unreplicatedTotal": -1530804718628866300,
+  "deletedkeyinfo": [
+    {
+      "omKeyInfoList": [
+        {
+          "metadata": {},
+          "objectID": 0,
+          "updateID": 0,
+          "parentObjectID": 0,
+          "volumeName": "sampleVol",
+          "bucketName": "bucketOne",
+          "keyName": "key_one",
+          "dataSize": -1530804718628866300,
+          "keyLocationVersions": [],
+          "creationTime": 0,
+          "modificationTime": 0,
+          "replicationConfig": {
+            "replicationFactor": "ONE",
+            "requiredNodes": 1,
+            "replicationType": "STANDALONE"
+          },
+          "fileChecksum": null,
+          "fileName": "key_one",
+          "acls": [],
+          "path": "0/key_one",
+          "file": false,
+          "latestVersionLocations": null,
+          "replicatedSize": -1530804718628866300,
+          "fileEncryptionInfo": null,
+          "objectInfo": "OMKeyInfo{volume='sampleVol', bucket='bucketOne', key='key_one', dataSize='-1530804718628866186', creationTime='0', objectID='0', parentID='0', replication='STANDALONE/ONE', fileChecksum='null}",
+          "updateIDset": false
+        }
+      ]
+    }
+  ],
+  "status": "OK"
+}
+```
+
+### GET /api/v1/keys/deletePending/dirs
+
+
+**Parameters**
+
+* prevKey (optional)
+
+   Returns the set of directories pending for deletion that are present after the given prevKey id.
+   Example: prevKey=/vol1/bucket1/bucket1/dir1, this will skip directories till it seeks correctly to the given prevKey.
+
+* limit (optional)
+
+   Only returns the limited number of results. The default limit is 1000.
+
+**Returns**
+
+   Returns set of directories pending for deletion.
+
+```json
+{
+  "lastKey": "vol1/bucket1/bucket1/dir1",
+  "replicatedTotal": -1530804718628866300,
+  "unreplicatedTotal": -1530804718628866300,
+  "deletedkeyinfo": [
+    {
+      "omKeyInfoList": [
+        {
+          "metadata": {},
+          "objectID": 0,
+          "updateID": 0,
+          "parentObjectID": 0,
+          "volumeName": "sampleVol",
+          "bucketName": "bucketOne",
+          "keyName": "key_one",
+          "dataSize": -1530804718628866300,
+          "keyLocationVersions": [],
+          "creationTime": 0,
+          "modificationTime": 0,
+          "replicationConfig": {
+            "replicationFactor": "ONE",
+            "requiredNodes": 1,
+            "replicationType": "STANDALONE"
+          },
+          "fileChecksum": null,
+          "fileName": "key_one",
+          "acls": [],
+          "path": "0/key_one",
+          "file": false,
+          "latestVersionLocations": null,
+          "replicatedSize": -1530804718628866300,
+          "fileEncryptionInfo": null,
+          "objectInfo": "OMKeyInfo{volume='sampleVol', bucket='bucketOne', key='key_one', dataSize='-1530804718628866186', creationTime='0', objectID='0', parentID='0', replication='STANDALONE/ONE', fileChecksum='null}",
+          "updateIDset": false
+        }
+      ]
+    }
+  ],
+  "status": "OK"
+}
+```
+
+## Blocks Metadata (admin only)
+### GET /api/v1/blocks/deletePending
+
+
+**Parameters**
+
+* prevKey (optional)
+
+  Only returns the list of blocks pending for deletion, that are present after the given block id (prevKey).
+  Example: prevKey=4, this will skip deletedBlocks table key to skip records before prevKey.
+
+* limit (optional)
+
+  Only returns the limited number of results. The default limit is 1000.
+
+**Returns**
+
+Returns list of blocks pending for deletion.
+
+```json
+{
+  "OPEN": [
+    {
+      "containerId": 100,
+      "localIDList": [
+        1,
+        2,
+        3,
+        4
+      ],
+      "localIDCount": 4,
+      "txID": 1
+    }
+  ]
+}
+```
 
 ## Namespace Metadata (admin only)
 
@@ -491,6 +777,114 @@ Returns a summary of the current state of the Ozone cluster.
      }
 ```
 
+## Volumes (admin only)
+
+### GET /api/v1/volumes
+
+**Parameters**
+
+* prevKey (optional)
+
+  Only returns the volume after the given prevKey.
+  Example: prevKey=vol1
+
+* limit (optional)
+
+  Only returns the limited number of results. The default limit is 1000.
+
+**Returns**
+
+Returns all the volumes in the cluster.
+
+```json
+     {
+     	"totalCount": 4,
+     	"volumes": [{
+          "volume": "vol1",
+          "owner": "testuser",
+          "admin": "ozone",
+          "creationTime": 1665588176660 ,
+          "modificationTime": 1665590397315,
+          "quotaInNamespace": 2048,
+          "quotaInBytes": 1073741824,
+          "usedNamespace": 10,
+          "acls": [
+            {
+              "type": "USER",
+              "name": "testuser",
+              "scope": "ACCESS",
+              "aclList": [
+                "WRITE",
+                "READ",
+                "DELETE"
+              ]
+            }
+          ]
+        },
+        ...
+        ]
+     }
+```
+
+## Buckets (admin only)
+
+### GET /api/v1/buckets
+
+**Parameters**
+
+* volume (optional)
+
+  The volume in string without any protocol prefix.
+
+* prevKey (optional)
+
+  Only returns the bucket after the given prevKey. prevKey is ignored if volume is not specified.
+  Example: prevKey=bucket1
+
+* limit (optional)
+
+  Only returns the limited number of results. The default limit is 1000.
+  
+
+**Returns**
+
+Returns all the buckets in the cluster if volume is not specified or it is an empty string. 
+If `volume` is specified, it returns only the buckets under `volume`.
+
+```json
+     {
+     	"totalCount": 5,
+     	"buckets": [{
+          "volumeName": "vol1",
+          "bucketName": "buck1",
+          "versioning": false,
+          "storageType": "DISK",
+          "creationTime": 1665588176616,
+          "modificationTime": 1665590392293,
+          "usedBytes": 943718400,
+          "usedNamespace": 40000,
+          "quotaInBytes": 1073741824,
+          "quotaInNamespace": 50000,
+          "owner": "testuser",
+          "bucketLayout": "OBJECT_STORE",
+          "acls": [
+            {
+              "type": "USER",
+              "name": "testuser",
+              "scope": "ACCESS",
+              "aclList": [
+                "WRITE",
+                "READ",
+                "DELETE"
+              ]
+            }
+          ]
+        },
+        ...
+        ]
+     }
+```
+
 ## Datanodes
 
 ### GET /api/v1/datanodes
@@ -533,6 +927,39 @@ Returns all the datanodes in the cluster.
         ...
         ]
      }
+```
+
+### PUT /api/v1/datanodes/remove
+
+**Parameters**
+
+* uuids (List of node uuids in JSON array format).
+
+```json
+[
+  "50ca4c95-2ef3-4430-b944-97d2442c3daf"
+]  
+```
+
+**Returns**
+
+Returns the list of datanodes which are removed successfully and list of datanodes which were not found.
+
+```json
+{
+  "removedNodes": {
+    "totalCount": 1,
+    "datanodes": [
+      {
+        "uuid": "50ca4c95-2ef3-4430-b944-97d2442c3daf",
+        "hostname": "ozone-datanode-4.ozone_default",
+        "state": "DEAD",
+        "pipelines": null
+      }
+    ],
+    "message": "Success"
+  }
+}     
 ```
   
 ## Pipelines
@@ -635,6 +1062,28 @@ response object being the upper cap for file size range.
      	"fileSize": 1024,
      	"count": 2
      }]
+```
+
+### GET /api/v1/utilization/containerCount
+
+**Parameters**
+
+* containerSize (optional)
+
+  Filters the results based on the given container size. The smallest container size being tracked for count is 512 MB (512000000 bytes).
+
+**Returns**
+
+Returns the container counts within different container size ranges, with `containerSize` representing the size range and `count` representing the number of containers within that range.
+
+```json
+    [{
+      "containerSize": 2147483648,
+      "count": 9
+    }, {
+      "containerSize": 1073741824,
+      "count": 3
+    }]
 ```
   
 ## Metrics

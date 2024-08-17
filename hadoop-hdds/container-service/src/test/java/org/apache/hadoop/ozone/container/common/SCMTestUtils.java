@@ -16,6 +16,7 @@
  */
 package org.apache.hadoop.ozone.container.common;
 
+import java.io.File;
 import java.io.IOException;
 import java.net.InetAddress;
 import java.net.InetSocketAddress;
@@ -38,11 +39,10 @@ import org.apache.hadoop.ipc.RPC;
 import org.apache.hadoop.ozone.protocol.StorageContainerDatanodeProtocol;
 import org.apache.hadoop.ozone.protocolPB.StorageContainerDatanodeProtocolPB;
 import org.apache.hadoop.ozone.protocolPB.StorageContainerDatanodeProtocolServerSideTranslatorPB;
-import org.apache.ozone.test.GenericTestUtils;
 
 import com.google.protobuf.BlockingService;
-import static org.apache.hadoop.hdds.scm.ScmConfigKeys.HDDS_DATANODE_DIR_KEY;
-import org.mockito.Mockito;
+
+import static org.mockito.Mockito.mock;
 
 /**
  * Test Endpoint class.
@@ -102,7 +102,7 @@ public final class SCMTestUtils {
         StorageContainerDatanodeProtocolService.
             newReflectiveBlockingService(
                 new StorageContainerDatanodeProtocolServerSideTranslatorPB(
-                    server, Mockito.mock(ProtocolMessageMetrics.class)));
+                    server, mock(ProtocolMessageMetrics.class)));
 
     RPC.Server scmServer = startRpcServer(hadoopConfig, rpcServerAddresss,
         StorageContainerDatanodeProtocolPB.class, scmDatanodeService,
@@ -121,12 +121,14 @@ public final class SCMTestUtils {
     }
   }
 
-  public static OzoneConfiguration getConf() {
+  public static OzoneConfiguration getConf(File testDir) {
     OzoneConfiguration conf = new OzoneConfiguration();
-    conf.set(HDDS_DATANODE_DIR_KEY, GenericTestUtils
-        .getRandomizedTempPath());
-    conf.set(HddsConfigKeys.OZONE_METADATA_DIRS, GenericTestUtils
-        .getRandomizedTempPath());
+    conf.set(ScmConfigKeys.HDDS_DATANODE_DIR_KEY,
+        new File(testDir, "datanode").getAbsolutePath());
+    conf.set(HddsConfigKeys.OZONE_METADATA_DIRS,
+        new File(testDir, "metadata").getAbsolutePath());
+    conf.set(ScmConfigKeys.OZONE_SCM_DATANODE_ID_DIR,
+        new File(testDir, "datanodeID").getAbsolutePath());
     conf.setClass(SpaceUsageCheckFactory.Conf.configKeyForClassName(),
         MockSpaceUsageCheckFactory.None.class,
         SpaceUsageCheckFactory.class);
@@ -153,8 +155,8 @@ public final class SCMTestUtils {
 
   private static boolean isUseRatis(ConfigurationSource c) {
     return c.getBoolean(
-        ScmConfigKeys.DFS_CONTAINER_RATIS_ENABLED_KEY,
-        ScmConfigKeys.DFS_CONTAINER_RATIS_ENABLED_DEFAULT);
+        ScmConfigKeys.HDDS_CONTAINER_RATIS_ENABLED_KEY,
+        ScmConfigKeys.HDDS_CONTAINER_RATIS_ENABLED_DEFAULT);
   }
 
 }

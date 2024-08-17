@@ -41,7 +41,10 @@ import picocli.CommandLine.ParentCommand;
         CreateSnapshotHandler.class,
         DeleteSnapshotHandler.class,
         ListSnapshotHandler.class,
-        SnapshotDiffHandler.class
+        SnapshotDiffHandler.class,
+        ListSnapshotDiffHandler.class,
+        InfoSnapshotHandler.class,
+        RenameSnapshotHandler.class
     },
     mixinStandardHelpOptions = true,
     versionProvider = HddsVersionProvider.class)

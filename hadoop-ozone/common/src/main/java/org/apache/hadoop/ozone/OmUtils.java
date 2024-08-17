@@ -27,6 +27,7 @@ import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.security.SecureRandom;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Collection;
 import java.util.Collections;
 import java.util.HashMap;
@@ -39,8 +40,8 @@ import java.util.Set;
 import java.util.stream.Collectors;
 import java.util.Comparator;
 
-import edu.umd.cs.findbugs.annotations.SuppressFBWarnings;
 import org.apache.hadoop.fs.Path;
+import org.apache.hadoop.hdds.conf.ConfigurationException;
 import org.apache.hadoop.hdds.conf.ConfigurationSource;
 import org.apache.hadoop.hdds.conf.OzoneConfiguration;
 import org.apache.hadoop.hdds.protocol.proto.HddsProtos;
@@ -49,6 +50,7 @@ import org.apache.hadoop.net.NetUtils;
 import org.apache.hadoop.ozone.conf.OMClientConfig;
 import org.apache.hadoop.ozone.ha.ConfUtils;
 import org.apache.hadoop.ozone.om.exceptions.OMException;
+import org.apache.hadoop.ozone.om.helpers.BucketLayout;
 import org.apache.hadoop.ozone.om.helpers.OMNodeDetails;
 import org.apache.hadoop.ozone.om.helpers.OmKeyInfo;
 import org.apache.hadoop.ozone.om.helpers.RepeatedOmKeyInfo;
@@ -62,6 +64,7 @@ import static org.apache.hadoop.hdds.HddsUtils.getHostNameFromConfigKeys;
 import static org.apache.hadoop.hdds.HddsUtils.getPortNumberFromConfigKeys;
 import static org.apache.hadoop.ozone.OzoneConsts.OM_KEY_PREFIX;
 import static org.apache.hadoop.ozone.OzoneConsts.OM_SNAPSHOT_INDICATOR;
+import static org.apache.hadoop.ozone.OzoneConsts.OZONE_URI_DELIMITER;
 import static org.apache.hadoop.ozone.om.OMConfigKeys.OZONE_OM_ADDRESS_KEY;
 import static org.apache.hadoop.ozone.om.OMConfigKeys.OZONE_OM_BIND_HOST_DEFAULT;
 import static org.apache.hadoop.ozone.om.OMConfigKeys.OZONE_OM_DECOMMISSIONED_NODES_KEY;
@@ -238,12 +241,15 @@ public final class OmUtils {
     case ListBuckets:
     case LookupKey:
     case ListKeys:
+    case ListKeysLight:
     case ListTrash:
     case ServiceList:
+    case ListOpenFiles:
     case ListMultiPartUploadParts:
     case GetFileStatus:
     case LookupFile:
     case ListStatus:
+    case ListStatusLight:
     case GetAcl:
     case DBUpdates:
     case ListMultipartUploads:
@@ -254,7 +260,7 @@ public final class OmUtils {
     case TenantGetUserInfo:
     case TenantListUser:
     case ListSnapshot:
-    case EchoRPC:
+    case RefetchSecretKey:
     case RangerBGSync:
       // RangerBGSync is a read operation in the sense that it doesn't directly
       // write to OM DB. And therefore it doesn't need a OMClientRequest.
@@ -262,7 +268,12 @@ public final class OmUtils {
       // operation SetRangerServiceVersion.
     case GetKeyInfo:
     case SnapshotDiff:
+    case CancelSnapshotDiff:
+    case ListSnapshotDiffJobs:
     case TransferLeadership:
+    case SetSafeMode:
+    case PrintCompactionLogDag:
+    case GetSnapshotInfo:
       return true;
     case CreateVolume:
     case SetVolumeProperty:
@@ -309,10 +320,17 @@ public final class OmUtils {
     case SetRangerServiceVersion:
     case CreateSnapshot:
     case DeleteSnapshot:
+    case RenameSnapshot:
     case SnapshotMoveDeletedKeys:
     case SnapshotPurge:
     case RecoverLease:
+    case SetTimes:
+    case AbortExpiredMultiPartUploads:
+    case SetSnapshotProperty:
+    case UnknownCommand:
       return false;
+    case EchoRPC:
+      return omRequest.getEchoRPCRequest().getReadOnly();
     default:
       LOG.error("CmdType {} is not categorized as readOnly or not.", cmdType);
       return false;
@@ -338,13 +356,36 @@ public final class OmUtils {
       String omServiceId) {
     String nodeIdsKey = ConfUtils.addSuffix(OZONE_OM_NODES_KEY, omServiceId);
     Collection<String> nodeIds = conf.getTrimmedStringCollection(nodeIdsKey);
-    String decommNodesKey = ConfUtils.addKeySuffixes(
-        OZONE_OM_DECOMMISSIONED_NODES_KEY, omServiceId);
-    Collection<String> decommNodeIds = conf.getTrimmedStringCollection(
-        decommNodesKey);
-    nodeIds.removeAll(decommNodeIds);
+    String decommissionNodesKeyWithServiceIdSuffix =
+        ConfUtils.addKeySuffixes(OZONE_OM_DECOMMISSIONED_NODES_KEY,
+            omServiceId);
+    Collection<String> decommissionedNodeIds =
+        getDecommissionedNodeIds(conf, decommissionNodesKeyWithServiceIdSuffix);
+    nodeIds.removeAll(decommissionedNodeIds);
 
     return nodeIds;
+  }
+
+  /**
+   * Returns a collection of configured nodeId's that are to be decommissioned.
+   * Aggregate results from both config keys - with and without serviceId
+   * suffix. If ozone.om.service.ids contains a single service ID, then a config
+   * key without suffix defaults to nodeID associated with that serviceID.
+   */
+  public static Collection<String> getDecommissionedNodeIds(
+      ConfigurationSource conf,
+      String decommissionedNodesKeyWithServiceIdSuffix) {
+    HashSet<String> serviceIds = new HashSet<>(
+        conf.getTrimmedStringCollection(OZONE_OM_SERVICE_IDS_KEY));
+    HashSet<String> decommissionedNodeIds = new HashSet<>(
+        conf.getTrimmedStringCollection(
+            decommissionedNodesKeyWithServiceIdSuffix));
+    // If only one serviceID is configured, also check property without prefix
+    if (decommissionedNodeIds.isEmpty() && serviceIds.size() == 1) {
+      decommissionedNodeIds.addAll(
+          conf.getTrimmedStringCollection(OZONE_OM_DECOMMISSIONED_NODES_KEY));
+    }
+    return decommissionedNodeIds;
   }
 
   /**
@@ -360,6 +401,7 @@ public final class OmUtils {
 
     nodeIds.addAll(conf.getTrimmedStringCollection(nodeIdsKey));
     nodeIds.addAll(conf.getTrimmedStringCollection(decommNodesKey));
+    nodeIds.addAll(conf.getTrimmedStringCollection(OZONE_OM_DECOMMISSIONED_NODES_KEY));
 
     return nodeIds;
   }
@@ -447,7 +489,6 @@ public final class OmUtils {
    * repeatedOmKeyInfo instance.
    * 3. Set the updateID to the transactionLogIndex.
    * @param keyInfo args supplied by client
-   * @param repeatedOmKeyInfo key details from deletedTable
    * @param trxnLogIndex For Multipart keys, this is the transactionLogIndex
    *                     of the MultipartUploadAbort request which needs to
    *                     be set as the updateID of the partKeyInfos.
@@ -456,8 +497,7 @@ public final class OmUtils {
    * @return {@link RepeatedOmKeyInfo}
    */
   public static RepeatedOmKeyInfo prepareKeyForDelete(OmKeyInfo keyInfo,
-      RepeatedOmKeyInfo repeatedOmKeyInfo, long trxnLogIndex,
-      boolean isRatisEnabled) {
+      long trxnLogIndex, boolean isRatisEnabled) {
     // If this key is in a GDPR enforced bucket, then before moving
     // KeyInfo to deletedTable, remove the GDPR related metadata and
     // FileEncryptionInfo from KeyInfo.
@@ -473,15 +513,8 @@ public final class OmUtils {
     // Set the updateID
     keyInfo.setUpdateID(trxnLogIndex, isRatisEnabled);
 
-    if (repeatedOmKeyInfo == null) {
-      //The key doesn't exist in deletedTable, so create a new instance.
-      repeatedOmKeyInfo = new RepeatedOmKeyInfo(keyInfo);
-    } else {
-      //The key exists in deletedTable, so update existing instance.
-      repeatedOmKeyInfo.addOmKeyInfo(keyInfo);
-    }
-
-    return repeatedOmKeyInfo;
+    //The key doesn't exist in deletedTable, so create a new instance.
+    return new RepeatedOmKeyInfo(keyInfo);
   }
 
   /**
@@ -490,7 +523,7 @@ public final class OmUtils {
   public static void validateVolumeName(String volumeName, boolean isStrictS3)
       throws OMException {
     try {
-      HddsClientUtils.verifyResourceName(volumeName, isStrictS3);
+      HddsClientUtils.verifyResourceName(volumeName, "volume", isStrictS3);
     } catch (IllegalArgumentException e) {
       throw new OMException("Invalid volume name: " + volumeName,
           OMException.ResultCodes.INVALID_VOLUME_NAME);
@@ -503,10 +536,29 @@ public final class OmUtils {
   public static void validateBucketName(String bucketName, boolean isStrictS3)
       throws OMException {
     try {
-      HddsClientUtils.verifyResourceName(bucketName, isStrictS3);
+      HddsClientUtils.verifyResourceName(bucketName, "bucket", isStrictS3);
     } catch (IllegalArgumentException e) {
       throw new OMException("Invalid bucket name: " + bucketName,
           OMException.ResultCodes.INVALID_BUCKET_NAME);
+    }
+  }
+
+  /**
+   * Verify bucket layout is a valid.
+   *
+   * @return The {@link BucketLayout} corresponding to the string.
+   * @throws ConfigurationException If the bucket layout is not valid.
+   */
+  public static BucketLayout validateBucketLayout(String bucketLayoutString) {
+    boolean bucketLayoutValid = Arrays.stream(BucketLayout.values())
+        .anyMatch(layout -> layout.name().equals(bucketLayoutString));
+    if (bucketLayoutValid) {
+      return BucketLayout.fromString(bucketLayoutString);
+    } else {
+      throw new ConfigurationException(bucketLayoutString +
+          " is not a valid default bucket layout. Supported values are " +
+          Arrays.stream(BucketLayout.values())
+              .map(Enum::toString).collect(Collectors.joining(", ")));
     }
   }
 
@@ -520,9 +572,9 @@ public final class OmUtils {
       return;
     }
     try {
-      HddsClientUtils.verifyResourceName(snapshotName);
+      HddsClientUtils.verifyResourceName(snapshotName, "snapshot");
     } catch (IllegalArgumentException e) {
-      throw new OMException("Invalid snapshot name: " + snapshotName,
+      throw new OMException("Invalid snapshot name: " + snapshotName + "\n" + e.getMessage(),
           OMException.ResultCodes.INVALID_SNAPSHOT_ERROR);
     }
   }
@@ -591,6 +643,54 @@ public final class OmUtils {
   }
 
   /**
+   * Verify if key name contains snapshot reserved word.
+   * This verification will run even when
+   * ozone.om.keyname.character.check.enabled sets to false
+   */
+  public static void verifyKeyNameWithSnapshotReservedWord(String keyName)
+      throws OMException {
+    if (keyName != null &&
+        keyName.startsWith(OM_SNAPSHOT_INDICATOR)) {
+      if (keyName.length() > OM_SNAPSHOT_INDICATOR.length()) {
+        if (keyName.substring(OM_SNAPSHOT_INDICATOR.length())
+            .startsWith(OM_KEY_PREFIX)) {
+          throw new OMException(
+              "Cannot create key under path reserved for snapshot: " + OM_SNAPSHOT_INDICATOR + OM_KEY_PREFIX,
+              OMException.ResultCodes.INVALID_KEY_NAME);
+        }
+      } else {
+        // We checked for startsWith OM_SNAPSHOT_INDICATOR, and the length is
+        // the same, so it must be equal OM_SNAPSHOT_INDICATOR.
+        throw new OMException("Cannot create key with reserved name: " + OM_SNAPSHOT_INDICATOR,
+            OMException.ResultCodes.INVALID_KEY_NAME);
+      }
+    }
+  }
+
+  /**
+   * Verify if key name contains snapshot reserved word.
+   * This is similar to verifyKeyNameWithSnapshotReservedWord. The only difference is exception message.
+   */
+  public static void verifyKeyNameWithSnapshotReservedWordForDeletion(String keyName)  throws OMException {
+    if (keyName != null &&
+        keyName.startsWith(OM_SNAPSHOT_INDICATOR)) {
+      if (keyName.length() > OM_SNAPSHOT_INDICATOR.length()) {
+        if (keyName.substring(OM_SNAPSHOT_INDICATOR.length())
+            .startsWith(OM_KEY_PREFIX)) {
+          throw new OMException(
+              "Cannot delete key under path reserved for snapshot: " + OM_SNAPSHOT_INDICATOR + OM_KEY_PREFIX,
+              OMException.ResultCodes.INVALID_KEY_NAME);
+        }
+      } else {
+        // We checked for startsWith OM_SNAPSHOT_INDICATOR, and the length is
+        // the same, so it must be equal OM_SNAPSHOT_INDICATOR.
+        throw new OMException("Cannot delete key with reserved name: " + OM_SNAPSHOT_INDICATOR,
+            OMException.ResultCodes.INVALID_KEY_NAME);
+      }
+    }
+  }
+
+  /**
    * Return configured OzoneManager service id based on the following logic.
    * Look at 'ozone.om.internal.service.id' first. If configured, return that.
    * If the above is not configured, look at 'ozone.om.service.ids'.
@@ -643,7 +743,6 @@ public final class OmUtils {
    * does not preserve.
    * @return normalized key name.
    */
-  @SuppressFBWarnings("DMI_HARDCODED_ABSOLUTE_FILENAME")
   public static String normalizeKey(String keyName,
       boolean preserveTrailingSlash) {
     // For empty strings do nothing, just return the same.
@@ -660,13 +759,54 @@ public final class OmUtils {
         LOG.debug("Normalized key {} to {} ", keyName,
             normalizedKeyName.substring(1));
       }
-      if (preserveTrailingSlash && keyName.endsWith("/")) {
-        return normalizedKeyName.substring(1) + "/";
+      if (preserveTrailingSlash && keyName.endsWith(OZONE_URI_DELIMITER)) {
+        return normalizedKeyName.substring(1) + OZONE_URI_DELIMITER;
       }
       return normalizedKeyName.substring(1);
     }
 
     return keyName;
+  }
+
+  /**
+   * Normalizes a given path up to the bucket level.
+   *
+   * This method takes a path as input and normalises uptil the bucket level.
+   * It handles empty, removes leading slashes, and splits the path into
+   * segments. It then extracts the volume and bucket names, forming a
+   * normalized path with a single slash. Finally, any remaining segments are
+   * joined as the key name, returning the complete standardized path.
+   *
+   * @param path The path string to be normalized.
+   * @return The normalized path string.
+   */
+  public static String normalizePathUptoBucket(String path) {
+    if (path == null || path.isEmpty()) {
+      return OM_KEY_PREFIX; // Handle empty path
+    }
+
+    // Remove leading slashes
+    path = path.replaceAll("^/*", "");
+
+    String[] segments = path.split(OM_KEY_PREFIX, -1);
+
+    String volumeName = segments[0];
+    String bucketName = segments.length > 1 ? segments[1] : "";
+
+    // Combine volume and bucket.
+    StringBuilder normalizedPath = new StringBuilder(volumeName);
+    if (!bucketName.isEmpty()) {
+      normalizedPath.append(OM_KEY_PREFIX).append(bucketName);
+    }
+
+    // Add remaining segments as the key
+    if (segments.length > 2) {
+      normalizedPath.append(OM_KEY_PREFIX).append(
+          String.join(OM_KEY_PREFIX,
+              Arrays.copyOfRange(segments, 2, segments.length)));
+    }
+
+    return normalizedPath.toString();
   }
 
 
@@ -704,10 +844,9 @@ public final class OmUtils {
     } else {
       omNodeIds = OmUtils.getActiveOMNodeIds(conf, omServiceId);
     }
-    Collection<String> decommissionedNodeIds = conf.getTrimmedStringCollection(
+    Collection<String> decommissionedNodeIds = getDecommissionedNodeIds(conf,
             ConfUtils.addKeySuffixes(OZONE_OM_DECOMMISSIONED_NODES_KEY,
                     omServiceId));
-
     if (omNodeIds.isEmpty()) {
       // If there are no nodeIds present, return empty list
       return Collections.emptyList();
@@ -717,6 +856,12 @@ public final class OmUtils {
       try {
         OMNodeDetails omNodeDetails = OMNodeDetails.getOMNodeDetailsFromConf(
             conf, omServiceId, nodeId);
+        if (omNodeDetails == null) {
+          LOG.error(
+              "There is no OM configuration for node ID {} in ozone-site.xml.",
+              nodeId);
+          continue;
+        }
         if (decommissionedNodeIds.contains(omNodeDetails.getNodeId())) {
           omNodeDetails.setDecommissioningState();
         }
@@ -761,39 +906,29 @@ public final class OmUtils {
   public static boolean isBucketSnapshotIndicator(String key) {
     return key.startsWith(OM_SNAPSHOT_INDICATOR) && key.split("/").length == 2;
   }
-
-  public static String format(List<ServiceInfo> nodes, int port,
-                              String leaderId) {
-    StringBuilder sb = new StringBuilder();
+  
+  public static List<List<String>> format(
+          List<ServiceInfo> nodes, int port, String leaderId) {
+    List<List<String>> omInfoList = new ArrayList<>();
     // Ensuring OM's are printed in correct order
     List<ServiceInfo> omNodes = nodes.stream()
         .filter(node -> node.getNodeType() == HddsProtos.NodeType.OM)
         .sorted(Comparator.comparing(ServiceInfo::getHostname))
         .collect(Collectors.toList());
-    int count = 0;
     for (ServiceInfo info : omNodes) {
       // Printing only the OM's running
       if (info.getNodeType() == HddsProtos.NodeType.OM) {
-        String role =
-            info.getOmRoleInfo().getNodeId().equals(leaderId) ? "LEADER" :
-                "FOLLOWER";
-        sb.append(
-            String.format(
-                " { HostName: %s | Node-Id: %s | Ratis-Port : %d | Role: %s} ",
-                info.getHostname(),
-                info.getOmRoleInfo().getNodeId(),
-                port,
-                role
-            ));
-        count++;
+        String role = info.getOmRoleInfo().getNodeId().equals(leaderId)
+                      ? "LEADER" : "FOLLOWER";
+        List<String> omInfo = new ArrayList<>();
+        omInfo.add(info.getHostname());
+        omInfo.add(info.getOmRoleInfo().getNodeId());
+        omInfo.add(String.valueOf(port));
+        omInfo.add(role);
+        omInfoList.add(omInfo);
       }
     }
-    // Print Stand-alone if only one OM exists
-    if (count == 1) {
-      return "STANDALONE";
-    } else {
-      return sb.toString();
-    }
+    return omInfoList;
   }
 
   /**

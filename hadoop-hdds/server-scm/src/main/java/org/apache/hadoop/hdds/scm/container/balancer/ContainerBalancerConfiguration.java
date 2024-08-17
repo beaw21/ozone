@@ -26,7 +26,7 @@ import org.apache.hadoop.hdds.conf.OzoneConfiguration;
 import org.apache.hadoop.hdds.protocol.proto.HddsProtos.ContainerBalancerConfigurationProto;
 import org.apache.hadoop.hdds.scm.container.ContainerID;
 import org.apache.hadoop.ozone.OzoneConsts;
-import org.jetbrains.annotations.NotNull;
+import jakarta.annotation.Nonnull;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -338,6 +338,10 @@ public final class ContainerBalancerConfiguration {
     return Duration.ofMillis(moveReplicationTimeout);
   }
 
+  public void setMoveReplicationTimeout(Duration duration) {
+    this.moveReplicationTimeout = duration.toMillis();
+  }
+
   public void setMoveReplicationTimeout(long millis) {
     this.moveReplicationTimeout = millis;
   }
@@ -411,7 +415,16 @@ public final class ContainerBalancerConfiguration {
             "%-50s %d%n" +
             "%-50s %dGB%n" +
             "%-50s %dGB%n" +
-            "%-50s %dGB%n", "Key", "Value", "Threshold",
+            "%-50s %dGB%n" +
+            "%-50s %d%n" +
+            "%-50s %dmin%n" +
+            "%-50s %dmin%n" +
+            "%-50s %dmin%n" +
+            "%-50s %s%n" +
+            "%-50s %s%n" +
+            "%-50s %s%n" +
+            "%-50s %s%n" +
+            "%-50s %s%n", "Key", "Value", "Threshold",
         threshold, "Max Datanodes to Involve per Iteration(percent)",
         maxDatanodesPercentageToInvolvePerIteration,
         "Max Size to Move per Iteration",
@@ -419,10 +432,28 @@ public final class ContainerBalancerConfiguration {
         "Max Size Entering Target per Iteration",
         maxSizeEnteringTarget / OzoneConsts.GB,
         "Max Size Leaving Source per Iteration",
-        maxSizeLeavingSource / OzoneConsts.GB);
+        maxSizeLeavingSource / OzoneConsts.GB,
+        "Number of Iterations",
+        iterations,
+        "Time Limit for Single Container's Movement",
+        Duration.ofMillis(moveTimeout).toMinutes(),
+        "Time Limit for Single Container's Replication",
+        Duration.ofMillis(moveReplicationTimeout).toMinutes(),
+        "Interval between each Iteration",
+        Duration.ofMillis(balancingInterval).toMinutes(),
+        "Whether to Enable Network Topology",
+        networkTopologyEnable,
+        "Whether to Trigger Refresh Datanode Usage Info",
+        triggerDuEnable,
+        "Container IDs to Exclude from Balancing",
+        excludeContainers.equals("") ? "None" : excludeContainers,
+        "Datanodes Specified to be Balanced",
+        includeNodes.equals("") ? "None" : includeNodes,
+        "Datanodes Excluded from Balancing",
+        excludeNodes.equals("") ? "None" : excludeNodes);
   }
 
-  ContainerBalancerConfigurationProto.Builder toProtobufBuilder() {
+  public ContainerBalancerConfigurationProto.Builder toProtobufBuilder() {
     ContainerBalancerConfigurationProto.Builder builder =
         ContainerBalancerConfigurationProto.newBuilder();
 
@@ -445,8 +476,8 @@ public final class ContainerBalancerConfiguration {
   }
 
   static ContainerBalancerConfiguration fromProtobuf(
-      @NotNull ContainerBalancerConfigurationProto proto,
-      @NotNull OzoneConfiguration ozoneConfiguration) {
+      @Nonnull ContainerBalancerConfigurationProto proto,
+      @Nonnull OzoneConfiguration ozoneConfiguration) {
     ContainerBalancerConfiguration config =
         ozoneConfiguration.getObject(ContainerBalancerConfiguration.class);
     if (proto.hasUtilizationThreshold()) {

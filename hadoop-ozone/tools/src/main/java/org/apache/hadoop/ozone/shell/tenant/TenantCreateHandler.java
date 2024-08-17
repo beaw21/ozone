@@ -17,10 +17,10 @@
  */
 package org.apache.hadoop.ozone.shell.tenant;
 
-import com.google.gson.Gson;
-import com.google.gson.GsonBuilder;
-import com.google.gson.JsonObject;
+import com.fasterxml.jackson.databind.node.ObjectNode;
+import org.apache.hadoop.hdds.server.JsonUtils;
 import org.apache.hadoop.ozone.client.OzoneClient;
+import org.apache.hadoop.ozone.client.TenantArgs;
 import org.apache.hadoop.ozone.shell.OzoneAddress;
 import picocli.CommandLine;
 
@@ -37,19 +37,31 @@ public class TenantCreateHandler extends TenantHandler {
   @CommandLine.Parameters(description = "Tenant name", arity = "1..1")
   private String tenantId;
 
+  @CommandLine.Option(names = {"-f", "--force"},
+      description = "(Optional) Force tenant creation even when volume exists. "
+          + "This does NOT override other errors like Ranger failure.",
+      hidden = true)
+  // This option is intentionally hidden to avoid abuse.
+  private boolean forceCreationWhenVolumeExists;
+
   @Override
   protected void execute(OzoneClient client, OzoneAddress address)
       throws IOException {
 
-    client.getObjectStore().createTenant(tenantId);
+    final TenantArgs tenantArgs = TenantArgs.newBuilder()
+        .setVolumeName(tenantId)
+        .setForceCreationWhenVolumeExists(forceCreationWhenVolumeExists)
+        .build();
+
+    client.getObjectStore().createTenant(tenantId, tenantArgs);
     // RpcClient#createTenant prints INFO level log of tenant and volume name
 
     if (isVerbose()) {
-      final JsonObject obj = new JsonObject();
-      obj.addProperty("tenantId", tenantId);
-      final Gson gson = new GsonBuilder().setPrettyPrinting().create();
-      out().println(gson.toJson(obj));
-    }
+      ObjectNode obj = JsonUtils.createObjectNode(null);
+      obj.put("tenantId", tenantId);
 
+      String jsonString = JsonUtils.toJsonStringWithDefaultPrettyPrinter(obj);
+      out().println(jsonString);
+    }
   }
 }

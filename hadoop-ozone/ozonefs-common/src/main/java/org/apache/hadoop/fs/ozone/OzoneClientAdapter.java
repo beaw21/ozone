@@ -26,7 +26,11 @@ import java.util.List;
 import org.apache.hadoop.crypto.key.KeyProvider;
 import org.apache.hadoop.fs.FileChecksum;
 import org.apache.hadoop.fs.Path;
+import org.apache.hadoop.fs.SafeModeAction;
 import org.apache.hadoop.hdfs.protocol.SnapshotDiffReport;
+import org.apache.hadoop.ozone.om.helpers.LeaseKeyInfo;
+import org.apache.hadoop.ozone.om.helpers.OmKeyArgs;
+import org.apache.hadoop.ozone.om.helpers.OmKeyLocationInfo;
 import org.apache.hadoop.ozone.security.OzoneTokenIdentifier;
 import org.apache.hadoop.security.token.Token;
 
@@ -88,7 +92,24 @@ public interface OzoneClientAdapter {
 
   String createSnapshot(String pathStr, String snapshotName) throws IOException;
 
+  void renameSnapshot(String pathStr, String snapshotOldName, String snapshotNewName) throws IOException;
+
+  void deleteSnapshot(String pathStr, String snapshotName) throws IOException;
+
   SnapshotDiffReport getSnapshotDiffReport(Path snapshotDir,
       String fromSnapshot, String toSnapshot)
       throws IOException, InterruptedException;
+
+  LeaseKeyInfo recoverFilePrepare(String pathStr, boolean force) throws IOException;
+
+  void recoverFile(OmKeyArgs keyArgs) throws IOException;
+
+  long finalizeBlock(OmKeyLocationInfo block) throws IOException;
+
+  void setTimes(String key, long mtime, long atime) throws IOException;
+
+  boolean isFileClosed(String pathStr) throws IOException;
+
+  boolean setSafeMode(SafeModeAction action, boolean isChecked)
+      throws IOException;
 }

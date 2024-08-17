@@ -17,13 +17,14 @@
 CORE-SITE.XML_fs.ofs.impl=org.apache.hadoop.fs.ozone.RootedOzoneFileSystem
 
 OZONE-SITE.XML_hdds.datanode.dir=/data/hdds
+OZONE-SITE.XML_hdds.datanode.volume.min.free.space=100MB
 OZONE-SITE.XML_hdds.scm.safemode.min.datanode=3
 OZONE-SITE.XML_ozone.metadata.dirs=/data/metadata
 OZONE-SITE.XML_ozone.om.address=om
 OZONE-SITE.XML_ozone.om.http-address=om:9874
 OZONE-SITE.XML_ozone.recon.address=recon:9891
 OZONE-SITE.XML_ozone.recon.db.dir=/data/metadata/recon
-OZONE-SITE.XML_ozone.replication=3
+OZONE-SITE.XML_ozone.server.default.replication=3
 OZONE-SITE.XML_ozone.scm.block.client.address=scm
 OZONE-SITE.XML_ozone.scm.client.address=scm
 OZONE-SITE.XML_ozone.scm.container.size=1GB
@@ -34,4 +35,5 @@ OZONE-SITE.XML_ozone.scm.pipeline.owner.container.count=1
 OZONE-SITE.XML_recon.om.snapshot.task.interval.delay=1m
 OZONE-SITE.XML_hdds.scmclient.max.retry.timeout=30s
 OZONE-SITE.XML_ozone.default.bucket.layout=LEGACY
+OZONE-SITE.XML_ozone.http.basedir=/tmp/ozone_http
 no_proxy=om,recon,scm,s3g,kdc,localhost,127.0.0.1

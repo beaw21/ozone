@@ -36,7 +36,7 @@ fi
 
 REPORT_DIR=${OUTPUT_DIR:-"$DIR/../../../target/kubernetes"}
 
-OZONE_VERSION=$(mvn help:evaluate -Dexpression=ozone.version -q -DforceStdout)
+OZONE_VERSION=$(mvn help:evaluate -Dexpression=ozone.version -q -DforceStdout -Dscan=false)
 DIST_DIR="$DIR/../../dist/target/ozone-$OZONE_VERSION"
 
 if [ ! -d "$DIST_DIR" ]; then
@@ -51,4 +51,7 @@ cd "$DIST_DIR/kubernetes/examples" || exit 1
 RES=$?
 cp -r result/* "$REPORT_DIR/"
 cp "$REPORT_DIR/log.html" "$REPORT_DIR/summary.html"
+
+grep -A1 FAIL "${REPORT_DIR}/output.log" > "${REPORT_DIR}/summary.txt"
+
 exit $RES

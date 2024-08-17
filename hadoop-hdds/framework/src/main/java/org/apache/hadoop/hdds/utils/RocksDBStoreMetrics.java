@@ -18,6 +18,7 @@
 
 package org.apache.hadoop.hdds.utils;
 
+import org.apache.hadoop.hdds.StringUtils;
 import org.apache.hadoop.hdds.utils.db.RocksDatabase;
 import org.apache.hadoop.metrics2.MetricsCollector;
 import org.apache.hadoop.metrics2.MetricsRecordBuilder;
@@ -25,7 +26,6 @@ import org.apache.hadoop.metrics2.MetricsSource;
 import org.apache.hadoop.metrics2.MetricsSystem;
 import org.apache.hadoop.metrics2.lib.DefaultMetricsSystem;
 import org.apache.hadoop.metrics2.lib.Interns;
-import org.bouncycastle.util.Strings;
 import org.rocksdb.HistogramData;
 import org.rocksdb.HistogramType;
 import org.rocksdb.LiveFileMetaData;
@@ -230,17 +230,22 @@ public class RocksDBStoreMetrics implements MetricsSource {
           cfPros[index][0], e);
     }
 
-    // Calculate number of files per level and size per level
-    Map<String, Map<Integer, Map<String, Long>>> data = computeSstFileStat();
+    try {
+      // Calculate number of files per level and size per level
+      Map<String, Map<Integer, Map<String, Long>>> data = computeSstFileStat();
 
-    // Export file number
-    exportSstFileStat(rb, data.get(NUM_FILES_AT_LEVEL), NUM_FILES_AT_LEVEL);
+      // Export file number
+      exportSstFileStat(rb, data.get(NUM_FILES_AT_LEVEL), NUM_FILES_AT_LEVEL);
 
-    // Export file total size
-    exportSstFileStat(rb, data.get(SIZE_AT_LEVEL), SIZE_AT_LEVEL);
+      // Export file total size
+      exportSstFileStat(rb, data.get(SIZE_AT_LEVEL), SIZE_AT_LEVEL);
+    } catch (IOException e) {
+      LOG.error("Failed to compute sst file stat", e);
+    }
   }
 
-  private Map<String, Map<Integer, Map<String, Long>>> computeSstFileStat() {
+  private Map<String, Map<Integer, Map<String, Long>>> computeSstFileStat()
+      throws IOException {
     // Calculate number of files per level and size per level
     List<LiveFileMetaData> liveFileMetaDataList =
         rocksDB.getLiveFilesMetaData();
@@ -252,7 +257,7 @@ public class RocksDBStoreMetrics implements MetricsSource {
     Map<String, Long> sizeStat;
     for (LiveFileMetaData file : liveFileMetaDataList) {
       numStat = numStatPerCF.get(file.level());
-      String cf = Strings.fromByteArray(file.columnFamilyName());
+      String cf = StringUtils.bytes2String(file.columnFamilyName());
       if (numStat != null) {
         Long value = numStat.get(cf);
         numStat.put(cf, value == null ? 1L : value + 1);
@@ -292,7 +297,11 @@ public class RocksDBStoreMetrics implements MetricsSource {
   }
 
   private void getLatestSequenceNumber(MetricsRecordBuilder rb) {
-    rb.addCounter(Interns.info(LAST_SEQUENCE_NUMBER, "RocksDBStat"),
-        rocksDB.getLatestSequenceNumber());
+    try {
+      rb.addCounter(Interns.info(LAST_SEQUENCE_NUMBER, "RocksDBStat"),
+          rocksDB.getLatestSequenceNumber());
+    } catch (IOException e) {
+      LOG.error("Failed to get latest sequence number", e);
+    }
   }
 }

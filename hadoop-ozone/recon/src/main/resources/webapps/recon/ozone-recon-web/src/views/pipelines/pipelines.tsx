@@ -17,20 +17,22 @@
  */
 
 import React from 'react';
-import axios from 'axios';
-import {Table, Tabs, Tooltip, Icon} from 'antd';
-import './pipelines.less';
-import {PaginationConfig} from 'antd/lib/pagination';
-import prettyMilliseconds from 'pretty-ms';
 import moment from 'moment';
-import {ReplicationIcon} from 'utils/themeIcons';
-import {AutoReloadHelper} from 'utils/autoReloadHelper';
-import AutoReloadPanel from 'components/autoReloadPanel/autoReloadPanel';
-import {showDataFetchError} from 'utils/common';
-import {IAxiosResponse} from 'types/axios.types';
-import {ColumnSearch} from 'utils/columnSearch';
+import { Table, Tabs, Tooltip } from 'antd';
+import { TablePaginationConfig } from 'antd/es/table';
+import { InfoCircleOutlined } from '@ant-design/icons';
+import prettyMilliseconds from 'pretty-ms';
 
-const {TabPane} = Tabs;
+import { IAxiosResponse } from '@/types/axios.types';
+import AutoReloadPanel from '@/components/autoReloadPanel/autoReloadPanel';
+import { showDataFetchError } from '@/utils/common';
+import { ColumnSearch } from '@/utils/columnSearch';
+import { ReplicationIcon } from '@/utils/themeIcons';
+import { AutoReloadHelper } from '@/utils/autoReloadHelper';
+import { AxiosGetHelper, cancelRequests } from '@/utils/axiosRequestHelper';
+
+import './pipelines.less';
+
 const PipelineStatusList = ['OPEN', 'CLOSING', 'QUASI_CLOSED', 'CLOSED', 'UNHEALTHY', 'INVALID', 'DELETED', 'DORMANT'] as const;
 type PipelineStatusTuple = typeof PipelineStatusList;
 export type PipelineStatus = PipelineStatusTuple[number]; // 'OPEN' | 'CLOSING' | 'QUASI_CLOSED' | 'CLOSED' | 'UNHEALTHY' | 'INVALID' | 'DELETED';
@@ -81,7 +83,7 @@ const COLUMNS = [
             replicationFactor={replicationFactor}
             replicationType={replicationType}
             leaderNode={record.leaderNode}
-            isLeader={false}/>
+            isLeader={false} />
           {replicationType} ({replicationFactor})
         </span>
       );
@@ -95,7 +97,7 @@ const COLUMNS = [
     dataIndex: 'status',
     key: 'status',
     filterMultiple: true,
-    filters: PipelineStatusList.map(status => ({text: status, value: status})),
+    filters: PipelineStatusList.map(status => ({ text: status, value: status })),
     onFilter: (value: PipelineStatus, record: IPipelineResponse) => record.status === value,
     sorter: (a: IPipelineResponse, b: IPipelineResponse) => a.status.localeCompare(b.status)
   },
@@ -130,41 +132,43 @@ const COLUMNS = [
   },
   {
     title:
-  <span>
-    Last Leader Election&nbsp;
-    <Tooltip title='Elapsed time since the current leader got elected. Only available if any metrics service providers like Prometheus is configured.'>
-      <Icon type='info-circle'/>
-    </Tooltip>
-  </span>,
+      <span>
+        Last Leader Election&nbsp;
+        <Tooltip title='Elapsed time since the current leader got elected. Only available if any metrics service providers like Prometheus is configured.'>
+          <InfoCircleOutlined />
+        </Tooltip>
+      </span>,
     dataIndex: 'lastLeaderElection',
     key: 'lastLeaderElection',
     render: (lastLeaderElection: number) => lastLeaderElection > 0 ?
-      prettyMilliseconds(lastLeaderElection, {compact: true}) + " ago" : 'NA',
+      prettyMilliseconds(lastLeaderElection, { compact: true }) + ' ago' : 'NA',
     sorter: (a: IPipelineResponse, b: IPipelineResponse) => a.lastLeaderElection - b.lastLeaderElection
   },
   {
     title: 'Lifetime',
     dataIndex: 'duration',
     key: 'duration',
-    render: (duration: number) => prettyMilliseconds(duration, {compact: true}),
+    render: (duration: number) => prettyMilliseconds(duration, { compact: true }),
     sorter: (a: IPipelineResponse, b: IPipelineResponse) => a.duration - b.duration
   },
   {
     title:
-  <span>
-    No. of Elections&nbsp;
-    <Tooltip title='Number of elections in this pipeline. Only available if any metrics service providers like Prometheus is configured.'>
-      <Icon type='info-circle'/>
-    </Tooltip>
-  </span>,
+      <span>
+        No. of Elections&nbsp;
+        <Tooltip title='Number of elections in this pipeline. Only available if any metrics service providers like Prometheus is configured.'>
+          <InfoCircleOutlined />
+        </Tooltip>
+      </span>,
     dataIndex: 'leaderElections',
     key: 'leaderElections',
     isSearchable: true,
     render: (leaderElections: number) => leaderElections > 0 ?
-          leaderElections : 'NA',
+      leaderElections : 'NA',
     sorter: (a: IPipelineResponse, b: IPipelineResponse) => a.leaderElections - b.leaderElections
   }
 ];
+
+let cancelPipelineSignal: AbortController;
 
 export class Pipelines extends React.Component<Record<string, object>, IPipelinesState> {
   autoReload: AutoReloadHelper;
@@ -184,7 +188,10 @@ export class Pipelines extends React.Component<Record<string, object>, IPipeline
     this.setState({
       activeLoading: true
     });
-    axios.get('/api/v1/pipelines').then((response: IAxiosResponse<IPipelinesResponse>) => {
+    const { request, controller } = AxiosGetHelper('/api/v1/pipelines', cancelPipelineSignal);
+    cancelPipelineSignal = controller;
+
+    request.then((response: IAxiosResponse<IPipelinesResponse>) => {
       const pipelinesResponse: IPipelinesResponse = response.data;
       const totalCount = pipelinesResponse.totalCount;
       const pipelines: IPipelineResponse[] = pipelinesResponse.pipelines;
@@ -210,6 +217,9 @@ export class Pipelines extends React.Component<Record<string, object>, IPipeline
 
   componentWillUnmount(): void {
     this.autoReload.stopPolling();
+    cancelRequests([
+      cancelPipelineSignal
+    ])
   }
 
   onShowSizeChange = (current: number, pageSize: number) => {
@@ -224,8 +234,8 @@ export class Pipelines extends React.Component<Record<string, object>, IPipeline
   };
 
   render() {
-    const {activeDataSource, activeLoading, activeTotalCount, lastUpdated} = this.state;
-    const paginationConfig: PaginationConfig = {
+    const { activeDataSource, activeLoading, activeTotalCount, lastUpdated } = this.state;
+    const paginationConfig: TablePaginationConfig = {
       showTotal: (total: number, range) => `${range[0]}-${range[1]} of ${total} pipelines`,
       showSizeChanger: true,
       onShowSizeChange: this.onShowSizeChange
@@ -234,11 +244,11 @@ export class Pipelines extends React.Component<Record<string, object>, IPipeline
       <div className='pipelines-container'>
         <div className='page-header'>
           Pipelines ({activeTotalCount})
-          <AutoReloadPanel isLoading={activeLoading} lastRefreshed={lastUpdated} togglePolling={this.autoReload.handleAutoReloadToggle} onReload={this._loadData}/>
+          <AutoReloadPanel isLoading={activeLoading} lastRefreshed={lastUpdated} togglePolling={this.autoReload.handleAutoReloadToggle} onReload={this._loadData} />
         </div>
         <div className='content-div'>
           <Tabs defaultActiveKey='1' onChange={this.onTabChange}>
-            <TabPane key='1'>
+            <Tabs.TabPane key='1'>
               <Table
                 dataSource={activeDataSource}
                 columns={COLUMNS.reduce<any[]>((filtered, column) => {
@@ -255,10 +265,10 @@ export class Pipelines extends React.Component<Record<string, object>, IPipeline
                   return filtered;
                 }, [])}
                 loading={activeLoading} pagination={paginationConfig} rowKey='pipelineId'
-                scroll={{x: true, y: false, scrollToFirstRowOnChange: true}}
-                />
-            </TabPane>
-
+                scroll={{ x: 'max-content', scrollToFirstRowOnChange: true }}
+                locale={{ filterTitle: '' }}
+              />
+            </Tabs.TabPane>
           </Tabs>
         </div>
       </div>

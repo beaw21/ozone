@@ -20,18 +20,18 @@ package org.apache.hadoop.ozone.security;
 
 import org.apache.commons.io.FileUtils;
 import org.apache.hadoop.hdds.conf.OzoneConfiguration;
-import org.apache.hadoop.hdds.security.x509.SecurityConfig;
-import org.apache.hadoop.hdds.security.x509.certificate.client.CertificateClient;
+import org.apache.hadoop.hdds.protocol.proto.HddsProtos;
+import org.apache.hadoop.hdds.security.SecurityConfig;
 import org.apache.hadoop.hdds.security.x509.certificate.utils.CertificateCodec;
 import org.apache.hadoop.hdds.security.x509.keys.HDDSKeyGenerator;
 import org.apache.hadoop.hdds.security.x509.keys.KeyCodec;
 import org.apache.hadoop.ozone.OzoneSecurityUtil;
 import org.apache.hadoop.ozone.om.OMStorage;
+import org.apache.hadoop.ozone.om.OzoneManager;
 import org.apache.hadoop.security.ssl.KeyStoreTestUtil;
-import org.apache.ozone.test.GenericTestUtils;
-import org.bouncycastle.cert.X509CertificateHolder;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.io.TempDir;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.Arguments;
 import org.junit.jupiter.params.provider.MethodSource;
@@ -49,7 +49,6 @@ import static org.apache.hadoop.hdds.HddsConfigKeys.HDDS_METADATA_DIR_NAME;
 import static org.apache.hadoop.hdds.security.x509.certificate.client.CertificateClient.InitResponse;
 import static org.apache.hadoop.hdds.security.x509.certificate.client.CertificateClient.InitResponse.FAILURE;
 import static org.apache.hadoop.hdds.security.x509.certificate.client.CertificateClient.InitResponse.GETCERT;
-import static org.apache.hadoop.hdds.security.x509.certificate.client.CertificateClient.InitResponse.RECOVER;
 import static org.apache.hadoop.hdds.security.x509.certificate.client.CertificateClient.InitResponse.SUCCESS;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -64,9 +63,8 @@ public class TestOmCertificateClientInit {
 
   private KeyPair keyPair;
   private String certSerialId = "3284792342234";
-  private CertificateClient omCertificateClient;
+  private OMCertificateClient omCertificateClient;
   private HDDSKeyGenerator keyGenerator;
-  private Path metaDirPath;
   private SecurityConfig securityConfig;
   private KeyCodec omKeyCodec;
   private X509Certificate x509Certificate;
@@ -77,7 +75,7 @@ public class TestOmCertificateClientInit {
         arguments(false, false, false, GETCERT),
         arguments(false, false, true, FAILURE),
         arguments(false, true, false, FAILURE),
-        arguments(true, false, false, FAILURE),
+        arguments(true, false, false, GETCERT),
         arguments(false, true, true, FAILURE),
         arguments(true, true, false, GETCERT),
         arguments(true, false, true, SUCCESS),
@@ -86,11 +84,8 @@ public class TestOmCertificateClientInit {
   }
 
   @BeforeEach
-  public void setUp() throws Exception {
+  public void setUp(@TempDir Path metaDirPath) throws Exception {
     OzoneConfiguration config = new OzoneConfiguration();
-    final String path = GenericTestUtils
-        .getTempPath(UUID.randomUUID().toString());
-    metaDirPath = Paths.get(path, "test");
     config.set(HDDS_METADATA_DIR_NAME, metaDirPath.toString());
     securityConfig = new SecurityConfig(config);
     keyGenerator = new HDDSKeyGenerator(securityConfig);
@@ -101,8 +96,11 @@ public class TestOmCertificateClientInit {
     when(storage.getOmCertSerialId()).thenReturn(certSerialId);
     when(storage.getClusterID()).thenReturn("test");
     when(storage.getOmId()).thenReturn(UUID.randomUUID().toString());
+    HddsProtos.OzoneManagerDetailsProto omInfo =
+        OzoneManager.getOmDetailsProto(config, storage.getOmId());
     omCertificateClient =
-        new OMCertificateClient(securityConfig, storage, null, null, null);
+        new OMCertificateClient(
+            securityConfig, null, storage, omInfo, "", null, null, null);
     omKeyCodec = new KeyCodec(securityConfig, OM_COMPONENT);
 
     Files.createDirectories(securityConfig.getKeyLocation(OM_COMPONENT));
@@ -112,7 +110,6 @@ public class TestOmCertificateClientInit {
   public void tearDown() throws IOException {
     omCertificateClient.close();
     omCertificateClient = null;
-    FileUtils.deleteQuietly(metaDirPath.toFile());
   }
 
   @ParameterizedTest
@@ -140,8 +137,7 @@ public class TestOmCertificateClientInit {
     if (certPresent) {
       CertificateCodec codec = new CertificateCodec(securityConfig,
           OM_COMPONENT);
-      codec.writeCertificate(new X509CertificateHolder(
-          x509Certificate.getEncoded()));
+      codec.writeCertificate(x509Certificate);
     } else {
       FileUtils.deleteQuietly(Paths.get(
           securityConfig.getKeyLocation(OM_COMPONENT).toString(),
@@ -150,7 +146,7 @@ public class TestOmCertificateClientInit {
     InitResponse response = omCertificateClient.init();
 
     if (pvtKeyPresent && pubKeyPresent && !certPresent) {
-      assertEquals(RECOVER, response);
+      assertEquals(GETCERT, response);
     } else {
       assertEquals(expectedResult, response);
     }

@@ -20,6 +20,9 @@ package org.apache.hadoop.ozone.om.request.s3.multipart;
 
 import com.google.common.base.Preconditions;
 import org.apache.hadoop.hdds.client.ReplicationConfig;
+import org.apache.hadoop.ozone.OzoneConsts;
+import org.apache.hadoop.ozone.om.helpers.KeyValueUtil;
+import org.apache.ratis.server.protocol.TermIndex;
 import org.apache.hadoop.ozone.om.OMMetadataManager;
 import org.apache.hadoop.ozone.om.OzoneConfigUtil;
 import org.apache.hadoop.ozone.om.OzoneManager;
@@ -30,8 +33,6 @@ import org.apache.hadoop.ozone.om.helpers.OmKeyInfo;
 import org.apache.hadoop.ozone.om.helpers.BucketLayout;
 import org.apache.hadoop.ozone.om.helpers.OmKeyLocationInfoGroup;
 import org.apache.hadoop.ozone.om.helpers.OmMultipartKeyInfo;
-import org.apache.hadoop.ozone.om.helpers.OzoneAclUtil;
-import org.apache.hadoop.ozone.om.ratis.utils.OzoneManagerDoubleBufferHelper;
 import org.apache.hadoop.ozone.om.request.file.OMDirectoryCreateRequestWithFSO;
 import org.apache.hadoop.ozone.om.request.file.OMFileRequest;
 import org.apache.hadoop.ozone.om.request.util.OmResponseUtil;
@@ -45,6 +46,7 @@ import org.apache.hadoop.ozone.protocol.proto.OzoneManagerProtocolProtos.OMRespo
 import org.apache.hadoop.ozone.protocolPB.OMPBHelper;
 
 import java.io.IOException;
+import java.nio.file.InvalidPathException;
 import java.nio.file.Paths;
 import java.util.ArrayList;
 import java.util.Collections;
@@ -67,9 +69,8 @@ public class S3InitiateMultipartUploadRequestWithFSO
 
   @Override
   @SuppressWarnings("methodlength")
-  public OMClientResponse validateAndUpdateCache(OzoneManager ozoneManager,
-      long transactionLogIndex,
-      OzoneManagerDoubleBufferHelper ozoneManagerDoubleBufferHelper) {
+  public OMClientResponse validateAndUpdateCache(OzoneManager ozoneManager, TermIndex termIndex) {
+    final long transactionLogIndex = termIndex.getIndex();
     MultipartInfoInitiateRequest multipartInfoInitiateRequest =
         getOmRequest().getInitiateMultiPartUploadRequest();
 
@@ -79,6 +80,7 @@ public class S3InitiateMultipartUploadRequestWithFSO
     Preconditions.checkNotNull(keyArgs.getMultipartUploadID());
 
     Map<String, String> auditMap = buildKeyArgsAuditMap(keyArgs);
+    auditMap.put(OzoneConsts.UPLOAD_ID, keyArgs.getMultipartUploadID());
 
     String volumeName = keyArgs.getVolumeName();
     String bucketName = keyArgs.getBucketName();
@@ -90,7 +92,7 @@ public class S3InitiateMultipartUploadRequestWithFSO
 
     ozoneManager.getMetrics().incNumInitiateMultipartUploads();
     boolean acquiredBucketLock = false;
-    IOException exception = null;
+    Exception exception = null;
     OmMultipartKeyInfo multipartKeyInfo = null;
     OmKeyInfo omKeyInfo = null;
     List<OmDirectoryInfo> missingParentInfos;
@@ -100,14 +102,11 @@ public class S3InitiateMultipartUploadRequestWithFSO
         getOmRequest());
     OMClientResponse omClientResponse = null;
     try {
-      keyArgs = resolveBucketLink(ozoneManager, keyArgs, auditMap);
-      volumeName = keyArgs.getVolumeName();
-      bucketName = keyArgs.getBucketName();
 
-      // TODO to support S3 ACL later.
-      acquiredBucketLock =
-          omMetadataManager.getLock().acquireWriteLock(BUCKET_LOCK,
-              volumeName, bucketName);
+      mergeOmLockDetails(
+          omMetadataManager.getLock().acquireWriteLock(BUCKET_LOCK, volumeName,
+              bucketName));
+      acquiredBucketLock = getOmLockDetails().isLockAcquired();
 
       validateBucketAndVolume(omMetadataManager, volumeName, bucketName);
 
@@ -118,10 +117,13 @@ public class S3InitiateMultipartUploadRequestWithFSO
       // check if the directory already existed in OM
       checkDirectoryResult(keyName, pathInfoFSO.getDirectoryResult());
 
+      final OmBucketInfo bucketInfo = getBucketInfo(omMetadataManager,
+          volumeName, bucketName);
+
       // add all missing parents to dir table
       missingParentInfos = OMDirectoryCreateRequestWithFSO
-          .getAllMissingParentDirInfo(ozoneManager, keyArgs, pathInfoFSO,
-              transactionLogIndex);
+          .getAllMissingParentDirInfo(ozoneManager, keyArgs, bucketInfo,
+              pathInfoFSO, transactionLogIndex);
 
       // We are adding uploadId to key, because if multiple users try to
       // perform multipart upload on the same key, each will try to upload, who
@@ -156,8 +158,6 @@ public class S3InitiateMultipartUploadRequestWithFSO
       // care of in the final complete multipart upload. AWS S3 behavior is
       // also like this, even when key exists in a bucket, user can still
       // initiate MPU.
-      final OmBucketInfo bucketInfo = getBucketInfo(omMetadataManager,
-          volumeName, bucketName);
       final ReplicationConfig replicationConfig = OzoneConfigUtil
           .resolveReplicationConfigPreference(keyArgs.getType(),
               keyArgs.getFactor(), keyArgs.getEcReplicationConfig(),
@@ -178,17 +178,21 @@ public class S3InitiateMultipartUploadRequestWithFSO
           .setVolumeName(volumeName)
           .setBucketName(bucketName)
           .setKeyName(keyArgs.getKeyName())
+          .setOwnerName(keyArgs.getOwnerName())
           .setCreationTime(keyArgs.getModificationTime())
           .setModificationTime(keyArgs.getModificationTime())
           .setReplicationConfig(replicationConfig)
           .setOmKeyLocationInfos(Collections.singletonList(
-              new OmKeyLocationInfoGroup(0, new ArrayList<>())))
-          .setAcls(OzoneAclUtil.fromProtobuf(keyArgs.getAclsList()))
+              new OmKeyLocationInfoGroup(0, new ArrayList<>(), true)))
+          .setAcls(getAclsForKey(keyArgs, bucketInfo, pathInfoFSO,
+              ozoneManager.getPrefixManager()))
           .setObjectID(pathInfoFSO.getLeafNodeObjectId())
           .setUpdateID(transactionLogIndex)
           .setFileEncryptionInfo(keyArgs.hasFileEncryptionInfo() ?
               OMPBHelper.convert(keyArgs.getFileEncryptionInfo()) : null)
           .setParentObjectID(pathInfoFSO.getLastKnownParentId())
+          .addAllMetadata(KeyValueUtil.getFromProtobuf(keyArgs.getMetadataList()))
+          .addAllTags(KeyValueUtil.getFromProtobuf(keyArgs.getTagsList()))
           .build();
       
       // validate and update namespace for missing parent directory
@@ -204,7 +208,7 @@ public class S3InitiateMultipartUploadRequestWithFSO
               missingParentInfos, null);
 
       OMFileRequest.addOpenFileTableCacheEntry(omMetadataManager,
-          multipartOpenKey, omKeyInfo, pathInfoFSO.getLeafNodeName(),
+          multipartOpenKey, omKeyInfo, pathInfoFSO.getLeafNodeName(), keyName,
               transactionLogIndex);
 
       // Add to cache
@@ -224,17 +228,18 @@ public class S3InitiateMultipartUploadRequestWithFSO
               bucketInfo.copyObject());
 
       result = Result.SUCCESS;
-    } catch (IOException ex) {
+    } catch (IOException | InvalidPathException ex) {
       result = Result.FAILURE;
       exception = ex;
       omClientResponse = new S3InitiateMultipartUploadResponseWithFSO(
           createErrorOMResponse(omResponse, exception), getBucketLayout());
     } finally {
-      addResponseToDoubleBuffer(transactionLogIndex, omClientResponse,
-          ozoneManagerDoubleBufferHelper);
       if (acquiredBucketLock) {
-        omMetadataManager.getLock().releaseWriteLock(BUCKET_LOCK,
-            volumeName, bucketName);
+        mergeOmLockDetails(omMetadataManager.getLock()
+            .releaseWriteLock(BUCKET_LOCK, volumeName, bucketName));
+      }
+      if (omClientResponse != null) {
+        omClientResponse.setOmLockDetails(getOmLockDetails());
       }
     }
     logResult(ozoneManager, multipartInfoInitiateRequest, auditMap, volumeName,

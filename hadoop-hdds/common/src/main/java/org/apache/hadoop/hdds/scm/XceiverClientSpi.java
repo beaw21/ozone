@@ -22,8 +22,8 @@ import java.io.Closeable;
 import java.io.IOException;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutionException;
-import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicInteger;
 
 import org.apache.hadoop.hdds.HddsUtils;
@@ -32,14 +32,23 @@ import org.apache.hadoop.hdds.protocol.datanode.proto.ContainerProtos.ContainerC
 import org.apache.hadoop.hdds.protocol.datanode.proto.ContainerProtos.ContainerCommandResponseProto;
 import org.apache.hadoop.hdds.protocol.proto.HddsProtos;
 import org.apache.hadoop.hdds.scm.pipeline.Pipeline;
-import org.apache.hadoop.hdds.scm.storage.CheckedBiFunction;
 
 import com.google.common.annotations.VisibleForTesting;
+import org.apache.ratis.util.function.CheckedBiConsumer;
 
 /**
  * A Client for the storageContainer protocol.
  */
 public abstract class XceiverClientSpi implements Closeable {
+
+  /**
+   * Validator for container command request/response.
+   */
+  public interface Validator extends
+      CheckedBiConsumer<ContainerCommandRequestProto,
+          ContainerCommandResponseProto, IOException> {
+    // just a shortcut to avoid having to repeat long list of generic parameters
+  }
 
   private final AtomicInteger referenceCount;
   private boolean isEvicted;
@@ -82,12 +91,6 @@ public abstract class XceiverClientSpi implements Closeable {
    */
   public abstract void connect() throws Exception;
 
-  /**
-   * Connects to the leader in the pipeline using encoded token. To be used
-   * in a secure cluster.
-   */
-  public abstract void connect(String encodedToken) throws Exception;
-
   @Override
   public abstract void close();
 
@@ -103,13 +106,11 @@ public abstract class XceiverClientSpi implements Closeable {
    * Sends a given command to server and gets the reply back.
    * @param request Request
    * @return Response to the command
-   * @throws IOException
    */
   public ContainerCommandResponseProto sendCommand(
       ContainerCommandRequestProto request) throws IOException {
     try {
-      XceiverClientReply reply;
-      reply = sendCommandAsync(request);
+      XceiverClientReply reply = sendCommandAsync(request);
       return reply.getResponse().get();
     } catch (InterruptedException e) {
       // Re-interrupt the thread while catching InterruptedException
@@ -126,17 +127,16 @@ public abstract class XceiverClientSpi implements Closeable {
    * @param request Request
    * @param validators functions to validate the response
    * @return Response to the command
-   * @throws IOException
    */
   public ContainerCommandResponseProto sendCommand(
-      ContainerCommandRequestProto request, List<CheckedBiFunction> validators)
+      ContainerCommandRequestProto request,
+      List<Validator> validators)
       throws IOException {
     try {
-      XceiverClientReply reply;
-      reply = sendCommandAsync(request);
+      XceiverClientReply reply = sendCommandAsync(request);
       ContainerCommandResponseProto responseProto = reply.getResponse().get();
-      for (CheckedBiFunction function : validators) {
-        function.apply(request, responseProto);
+      for (Validator function : validators) {
+        function.accept(request, responseProto);
       }
       return responseProto;
     } catch (InterruptedException e) {
@@ -158,7 +158,6 @@ public abstract class XceiverClientSpi implements Closeable {
    *
    * @param request Request
    * @return Response to the command
-   * @throws IOException
    */
   public abstract XceiverClientReply
       sendCommandAsync(ContainerCommandRequestProto request)
@@ -176,14 +175,10 @@ public abstract class XceiverClientSpi implements Closeable {
    * @param index index to watch for
    * @return reply containing the min commit index replicated to all or majority
    *         servers in case of a failure
-   * @throws InterruptedException
-   * @throws ExecutionException
-   * @throws TimeoutException
-   * @throws IOException
    */
-  public abstract XceiverClientReply watchForCommit(long index)
-      throws InterruptedException, ExecutionException, TimeoutException,
-      IOException;
+  public CompletableFuture<XceiverClientReply> watchForCommit(long index) {
+    return CompletableFuture.completedFuture(null);
+  }
 
   /**
    * returns the min commit index replicated to all servers.

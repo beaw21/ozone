@@ -26,8 +26,6 @@ import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Iterator;
 import java.util.List;
-import java.util.regex.Pattern;
-import java.util.stream.Collectors;
 
 /**
  * Utility class to facilitate network topology functions.
@@ -35,9 +33,6 @@ import java.util.stream.Collectors;
 public final class NetUtils {
 
   private static final Logger LOG = LoggerFactory.getLogger(NetUtils.class);
-
-  private static final Pattern TRAILING_PATH_SEPARATOR =
-      Pattern.compile(NetConstants.PATH_SEPARATOR_STR + "+$");
 
   private NetUtils() {
     // Prevent instantiation
@@ -104,18 +99,15 @@ public final class NetUtils {
         continue;
       }
       // excludedScope is child of ancestor
-      List<String> duplicateList = mutableExcludedScopes.stream()
-          .filter(ancestor::isAncestor)
-          .collect(Collectors.toList());
-      mutableExcludedScopes.removeAll(duplicateList);
+      mutableExcludedScopes.removeIf(ancestor::isAncestor);
 
       // ancestor is covered by excludedScope
-      mutableExcludedScopes.stream().forEach(scope -> {
+      for (String scope : mutableExcludedScopes) {
         if (ancestor.isDescendant(scope)) {
           // remove exclude node if it's covered by excludedScope
           iterator.remove();
         }
-      });
+      }
     }
   }
 

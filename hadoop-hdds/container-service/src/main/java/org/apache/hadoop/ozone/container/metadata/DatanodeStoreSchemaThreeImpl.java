@@ -17,11 +17,12 @@
  */
 package org.apache.hadoop.ozone.container.metadata;
 
+import org.apache.hadoop.hdds.StringUtils;
 import org.apache.hadoop.hdds.conf.ConfigurationSource;
 import org.apache.hadoop.hdds.protocol.proto.StorageContainerDatanodeProtocolProtos.DeletedBlocksTransaction;
 import org.apache.hadoop.hdds.utils.MetadataKeyFilters;
 import org.apache.hadoop.hdds.utils.db.BatchOperation;
-import org.apache.hadoop.hdds.utils.db.FixedLengthStringUtils;
+import org.apache.hadoop.hdds.utils.db.FixedLengthStringCodec;
 import org.apache.hadoop.hdds.utils.db.RDBStore;
 import org.apache.hadoop.hdds.utils.db.RocksDatabase;
 import org.apache.hadoop.hdds.utils.db.RocksDatabase.ColumnFamily;
@@ -30,7 +31,6 @@ import org.apache.hadoop.hdds.utils.db.managed.ManagedCompactRangeOptions;
 import org.apache.hadoop.ozone.container.common.helpers.BlockData;
 import org.apache.hadoop.ozone.container.common.interfaces.BlockIterator;
 import org.apache.hadoop.ozone.container.common.statemachine.DatanodeConfiguration;
-import org.bouncycastle.util.Strings;
 import org.rocksdb.LiveFileMetaData;
 
 import java.io.File;
@@ -53,7 +53,7 @@ import static org.apache.hadoop.ozone.container.metadata.DatanodeSchemaThreeDBDe
  * - All keys have containerID as prefix.
  * - The table 3 has String as key instead of Long since we want to use prefix.
  */
-public class DatanodeStoreSchemaThreeImpl extends AbstractDatanodeStore
+public class DatanodeStoreSchemaThreeImpl extends DatanodeStoreWithIncrementalChunkList
     implements DeleteTransactionStore<String> {
 
   public static final String DUMP_FILE_SUFFIX = ".data";
@@ -94,12 +94,18 @@ public class DatanodeStoreSchemaThreeImpl extends AbstractDatanodeStore
             .iterator(getContainerKeyPrefix(containerID)), filter);
   }
 
+  @Override
+  public BlockIterator<Long> getFinalizeBlockIterator(long containerID,
+      MetadataKeyFilters.KeyPrefixFilter filter) throws IOException {
+    return new KeyValueBlockLocalIdIterator(containerID,
+        getFinalizeBlocksTableWithIterator().iterator(getContainerKeyPrefix(containerID)), filter);
+  }
+
   public void removeKVContainerData(long containerID) throws IOException {
     String prefix = getContainerKeyPrefix(containerID);
     try (BatchOperation batch = getBatchHandler().initBatchOperation()) {
       getMetadataTable().deleteBatchWithPrefix(batch, prefix);
       getBlockDataTable().deleteBatchWithPrefix(batch, prefix);
-      getDeletedBlocksTable().deleteBatchWithPrefix(batch, prefix);
       getDeleteTransactionTable().deleteBatchWithPrefix(batch, prefix);
       getBatchHandler().commitBatchOperation(batch);
     }
@@ -112,8 +118,6 @@ public class DatanodeStoreSchemaThreeImpl extends AbstractDatanodeStore
         getTableDumpFile(getMetadataTable(), dumpDir), prefix);
     getBlockDataTable().dumpToFileWithPrefix(
         getTableDumpFile(getBlockDataTable(), dumpDir), prefix);
-    getDeletedBlocksTable().dumpToFileWithPrefix(
-        getTableDumpFile(getDeletedBlocksTable(), dumpDir), prefix);
     getDeleteTransactionTable().dumpToFileWithPrefix(
         getTableDumpFile(getDeleteTransactionTable(), dumpDir),
         prefix);
@@ -125,8 +129,6 @@ public class DatanodeStoreSchemaThreeImpl extends AbstractDatanodeStore
         getTableDumpFile(getMetadataTable(), dumpDir));
     getBlockDataTable().loadFromFile(
         getTableDumpFile(getBlockDataTable(), dumpDir));
-    getDeletedBlocksTable().loadFromFile(
-        getTableDumpFile(getDeletedBlocksTable(), dumpDir));
     getDeleteTransactionTable().loadFromFile(
         getTableDumpFile(getDeleteTransactionTable(), dumpDir));
   }
@@ -150,13 +152,12 @@ public class DatanodeStoreSchemaThreeImpl extends AbstractDatanodeStore
     int numThreshold = df.getAutoCompactionSmallSstFileNum();
     long sizeThreshold = df.getAutoCompactionSmallSstFileSize();
     Map<String, Map<Integer, List<LiveFileMetaData>>> stat = new HashMap<>();
-    Map<Integer, List<LiveFileMetaData>> map;
 
     for (LiveFileMetaData file: liveFileMetaDataList) {
       if (file.size() >= sizeThreshold) {
         continue;
       }
-      String cf = Strings.fromByteArray(file.columnFamilyName());
+      String cf = StringUtils.bytes2String(file.columnFamilyName());
       stat.computeIfAbsent(cf, k -> new HashMap<>());
       stat.computeIfPresent(cf, (k, v) -> {
         v.computeIfAbsent(file.level(), l -> new LinkedList<>());
@@ -187,9 +188,9 @@ public class DatanodeStoreSchemaThreeImpl extends AbstractDatanodeStore
             long endCId = Long.MIN_VALUE;
             for (LiveFileMetaData file: innerEntry.getValue()) {
               long firstCId = DatanodeSchemaThreeDBDefinition.getContainerId(
-                  FixedLengthStringUtils.bytes2String(file.smallestKey()));
+                  FixedLengthStringCodec.bytes2String(file.smallestKey()));
               long lastCId = DatanodeSchemaThreeDBDefinition.getContainerId(
-                  FixedLengthStringUtils.bytes2String(file.largestKey()));
+                  FixedLengthStringCodec.bytes2String(file.largestKey()));
               startCId = Math.min(firstCId, startCId);
               endCId = Math.max(lastCId, endCId);
             }
@@ -211,7 +212,7 @@ public class DatanodeStoreSchemaThreeImpl extends AbstractDatanodeStore
                 options);
           } else {
             LOG.warn("Failed to find cf {} in DB {}", entry.getKey(),
-                getDbDef().getDBLocation(null));
+                getDbDef().getClass());
           }
         }
       }

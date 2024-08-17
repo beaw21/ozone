@@ -72,7 +72,17 @@ public enum Statistic {
   INVOCATION_OPEN(CommonStatisticNames.OP_OPEN,
       "Calls of open()"),
   INVOCATION_RENAME(CommonStatisticNames.OP_RENAME,
-      "Calls of rename()");
+      "Calls of rename()"),
+  INVOCATION_SET_TIMES(CommonStatisticNames.OP_SET_TIMES,
+      "Calls of setTimes()"),
+  INVOCATION_IS_FILE_CLOSED("op_is_file_closed",
+      "Calls of isFileClosed()"),
+  INVOCATION_RECOVER_FILE_PREPARE("op_recover_file_prepare",
+      "Calls of recoverFilePrepare()"),
+  INVOCATION_RECOVER_FILE("op_recover_file", "Calls of recoverFile()"),
+  INVOCATION_FINALIZE_BLOCK("op_finalize_block", "Calls of finalizeBlock()"),
+  INVOCATION_SET_SAFE_MODE("op_set_safe_mode",
+      "Calls of setSafeMode()");
 
   private static final Map<String, Statistic> SYMBOL_MAP =
       new HashMap<>(Statistic.values().length);

@@ -23,6 +23,7 @@ import org.apache.commons.lang3.tuple.ImmutablePair;
 import org.apache.hadoop.hdds.client.BlockID;
 import org.apache.hadoop.hdds.client.ECReplicationConfig;
 import org.apache.hadoop.hdds.protocol.DatanodeDetails;
+import org.apache.hadoop.hdds.scm.OzoneClientConfig;
 import org.apache.hadoop.hdds.scm.XceiverClientFactory;
 import org.apache.hadoop.hdds.scm.storage.BlockExtendedInputStream;
 import org.apache.hadoop.hdds.scm.storage.BlockLocationInfo;
@@ -41,6 +42,7 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collection;
 import java.util.Collections;
+import java.util.HashSet;
 import java.util.Iterator;
 import java.util.LinkedList;
 import java.util.List;
@@ -151,14 +153,15 @@ public class ECBlockReconstructedStripeInputStream extends ECBlockInputStream {
 
   @SuppressWarnings("checkstyle:ParameterNumber")
   public ECBlockReconstructedStripeInputStream(ECReplicationConfig repConfig,
-      BlockLocationInfo blockInfo, boolean verifyChecksum,
+      BlockLocationInfo blockInfo,
       XceiverClientFactory xceiverClientFactory,
       Function<BlockID, BlockLocationInfo> refreshFunction,
       BlockInputStreamFactory streamFactory,
       ByteBufferPool byteBufferPool,
-      ExecutorService ecReconstructExecutor) {
-    super(repConfig, blockInfo, verifyChecksum, xceiverClientFactory,
-        refreshFunction, streamFactory);
+      ExecutorService ecReconstructExecutor,
+      OzoneClientConfig config) {
+    super(repConfig, blockInfo, xceiverClientFactory,
+        refreshFunction, streamFactory, config);
     this.byteBufferPool = byteBufferPool;
     this.executor = ecReconstructExecutor;
 
@@ -196,6 +199,16 @@ public class ECBlockReconstructedStripeInputStream extends ECBlockInputStream {
       }
     }
     LOG.debug("{}: set failed indexes {}", this, failedDataIndexes);
+  }
+
+  /**
+   * Returns the set of failed indexes. This will be empty if no errors were
+   * encountered reading any of the block indexes, and no failed nodes were
+   * added via {@link #addFailedDatanodes(Collection)}.
+   * The returned set is a copy of the internal set, so it can be modified.
+   */
+  public synchronized Set<Integer> getFailedIndexes() {
+    return new HashSet<>(failedDataIndexes);
   }
 
   /**

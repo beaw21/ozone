@@ -52,10 +52,16 @@ message SCMSecurityRequest {
     optional SCMListCertificateRequestProto listCertificateRequest = 7;
     optional SCMGetSCMCertRequestProto getSCMCertificateRequest = 8;
     optional SCMListCACertificateRequestProto listCACertificateRequestProto = 9;
+    //10, 11 and 12 are removed from the code, kept here to preserve the numbers.
+    //once we switch to protoc3 for compile, we can remove these and reserve the numbers and names.
     optional SCMGetCrlsRequestProto getCrlsRequest = 10;
     optional SCMGetLatestCrlIdRequestProto getLatestCrlIdRequest = 11;
     optional SCMRevokeCertificatesRequestProto revokeCertificatesRequest = 12;
     optional SCMGetCertRequestProto getCertRequest = 13;
+    optional SCMGetAllRootCaCertificatesRequestProto
+        getAllRootCaCertificatesRequestProto = 14;
+    optional SCMRemoveExpiredCertificatesRequestProto
+        removeExpiredCertificatesRequestProto = 15;
 }
 
 message SCMSecurityResponse {
@@ -75,12 +81,17 @@ message SCMSecurityResponse {
 
     optional SCMListCertificateResponseProto listCertificateResponseProto = 7;
 
+    //8, 9 and 10 are removed from the code, kept here to preserve the numbers.
+    //once we switch to protoc3 for compile, we can remove these and reserve the numbers and names.
     optional SCMGetCrlsResponseProto getCrlsResponseProto = 8;
 
     optional SCMGetLatestCrlIdResponseProto getLatestCrlIdResponseProto = 9;
 
     optional SCMRevokeCertificatesResponseProto revokeCertificatesResponseProto = 10;
 
+    optional SCMGetAllRootCaCertificatesResponseProto allRootCaCertificatesResponseProto = 11;
+
+    optional SCMRemoveExpiredCertificatesResponseProto removeExpiredCertificatesResponseProto = 12;
 }
 
 enum Type {
@@ -92,10 +103,14 @@ enum Type {
     GetSCMCertificate = 6;
     GetRootCACertificate = 7;
     ListCACertificate = 8;
+    //9, 10 and 11 are removed from the code, kept here to preserve the numbers.
+    //once we switch to protoc3 for compile, we can remove these and reserve the numbers and names.
     GetCrls = 9;
     GetLatestCrlId = 10;
     RevokeCertificates = 11;
     GetCert = 12;
+    GetAllRootCaCertificates = 13;
+    RemoveExpiredCertificates = 14;
 }
 
 enum Status {
@@ -115,6 +130,8 @@ enum Status {
     BLOCK_TOKEN_VERIFICATION_FAILED = 14;
     GET_ROOT_CA_CERTIFICATE_FAILED = 15;
     NOT_A_PRIMARY_SCM = 16;
+    //17 are removed from the code, kept here to preserve the numbers.
+    //once we switch to protoc3 for compile, we can remove these and reserve the numbers and names.
     REVOKE_CERTIFICATE_FAILED = 17;
 }
 /**
@@ -143,6 +160,7 @@ message SCMGetCertRequestProto {
 message SCMGetSCMCertRequestProto {
     required ScmNodeDetailsProto scmDetails = 1;
     required string CSR = 2;
+    optional bool renew = 3[default = false];
 }
 
 /**
@@ -196,6 +214,14 @@ message SCMListCertificateResponseProto {
     repeated string certificates = 2;
 }
 
+message SCMGetAllRootCaCertificatesResponseProto {
+    repeated string allX509RootCaCertificates = 1;
+}
+
+message SCMRemoveExpiredCertificatesResponseProto {
+    repeated string removedExpiredCertificates = 1;
+}
+
 message SCMGetRootCACertificateRequestProto {
 }
 
@@ -205,10 +231,14 @@ message SCMListCACertificateRequestProto {
 /**
 * Proto request to get CRL.
 */
+// Not used in the code anymore, should be removed later on, once we updated to protoc3 and properly reserve
+// places where we used this earlier.
 message SCMGetCrlsRequestProto {
     repeated int64 crlId = 1;
 }
 
+// Not used in the code anymore, should be removed later on, once we updated to protoc3 and properly reserve
+// places where we used this earlier.
 message SCMGetCrlsResponseProto {
     repeated CRLInfoProto crlInfos = 1;
 }
@@ -216,13 +246,19 @@ message SCMGetCrlsResponseProto {
 /**
 * Proto request to get latest CRL id.
 */
+// Not used in the code anymore, should be removed later on, once we updated to protoc3 and properly reserve
+// places where we used this earlier.
 message SCMGetLatestCrlIdRequestProto {
 }
 
+// Not used in the code anymore, should be removed later on, once we updated to protoc3 and properly reserve
+// places where we used this earlier.
 message SCMGetLatestCrlIdResponseProto {
     optional int64 crlId = 1;
 }
 
+// Not used in the code anymore, should be removed later on, once we updated to protoc3 and properly reserve
+// places where we used this earlier.
 message SCMRevokeCertificatesRequestProto {
     // Match with org.bouncycastle.asn1.x509.CRLReason
     enum Reason {
@@ -242,8 +278,16 @@ message SCMRevokeCertificatesRequestProto {
     optional uint64 revokeTime = 3;
 }
 
+message SCMGetAllRootCaCertificatesRequestProto {
+}
+
+// Not used in the code anymore, should be removed later on, once we updated to protoc3 and properly reserve
+// places where we used this earlier.
 message SCMRevokeCertificatesResponseProto {
     optional int64 crlId = 1;
+}
+
+message SCMRemoveExpiredCertificatesRequestProto {
 }
 
 service SCMSecurityProtocolService {

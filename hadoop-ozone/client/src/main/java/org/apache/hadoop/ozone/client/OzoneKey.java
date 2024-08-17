@@ -20,7 +20,6 @@ package org.apache.hadoop.ozone.client;
 
 import com.fasterxml.jackson.annotation.JsonIgnore;
 import org.apache.hadoop.hdds.client.ReplicationConfig;
-import org.apache.hadoop.hdds.client.ReplicationFactor;
 import org.apache.hadoop.hdds.client.ReplicationType;
 import org.apache.hadoop.ozone.om.helpers.OmKeyInfo;
 
@@ -46,6 +45,10 @@ public class OzoneKey {
    */
   private final String name;
   /**
+   * Name of the Key owner.
+   */
+  private final String owner;
+  /**
    * Size of the data.
    */
   private final long dataSize;
@@ -60,30 +63,20 @@ public class OzoneKey {
 
   private ReplicationConfig replicationConfig;
 
-  private Map<String, String> metadata = new HashMap<>();
-  /**
-   * Constructs OzoneKey from OmKeyInfo.
-   *
-   */
-  @SuppressWarnings("parameternumber")
-  @Deprecated
-  public OzoneKey(String volumeName, String bucketName,
-                  String keyName, long size, long creationTime,
-                  long modificationTime, ReplicationType type,
-                  int replicationFactor) {
-    this(volumeName, bucketName, keyName, size, creationTime, modificationTime,
-            ReplicationConfig.fromTypeAndFactor(type,
-                    ReplicationFactor.valueOf(replicationFactor)));
-  }
+  private final Map<String, String> metadata = new HashMap<>();
+
+  private final Map<String, String> tags = new HashMap<>();
 
   /**
-   * Constructs OzoneKey from OmKeyInfo.
-   *
+   * Indicator if key is a file.
    */
+  private final boolean isFile;
+
   @SuppressWarnings("parameternumber")
   public OzoneKey(String volumeName, String bucketName,
-                  String keyName, long size, long creationTime,
-                  long modificationTime, ReplicationConfig replicationConfig) {
+      String keyName, long size, long creationTime,
+      long modificationTime, ReplicationConfig replicationConfig,
+      boolean isFile, String owner) {
     this.volumeName = volumeName;
     this.bucketName = bucketName;
     this.name = keyName;
@@ -91,16 +84,20 @@ public class OzoneKey {
     this.creationTime = Instant.ofEpochMilli(creationTime);
     this.modificationTime = Instant.ofEpochMilli(modificationTime);
     this.replicationConfig = replicationConfig;
+    this.isFile = isFile;
+    this.owner = owner;
   }
 
   @SuppressWarnings("parameternumber")
   public OzoneKey(String volumeName, String bucketName,
                   String keyName, long size, long creationTime,
                   long modificationTime, ReplicationConfig replicationConfig,
-                  Map<String, String> metadata) {
+                  Map<String, String> metadata, boolean isFile, String owner,
+                  Map<String, String> tags) {
     this(volumeName, bucketName, keyName, size, creationTime,
-        modificationTime, replicationConfig);
+        modificationTime, replicationConfig, isFile, owner);
     this.metadata.putAll(metadata);
+    this.tags.putAll(tags);
   }
 
   /**
@@ -131,6 +128,15 @@ public class OzoneKey {
   }
 
   /**
+   * Returns the Owner Name.
+   *
+   * @return keyName
+   */
+  public String getOwner() {
+    return owner;
+  }
+
+  /**
    * Returns the size of the data.
    *
    * @return dataSize
@@ -157,8 +163,22 @@ public class OzoneKey {
     return modificationTime;
   }
 
+  /**
+   * Returns the metadata of the key.
+   *
+   * @return key metadata.
+   */
   public Map<String, String> getMetadata() {
     return metadata;
+  }
+
+  /**
+   * Returns the tags of the key.
+   *
+   * @return key tags.
+   */
+  public Map<String, String> getTags() {
+    return tags;
   }
 
   public void setMetadata(Map<String, String> metadata) {
@@ -187,11 +207,24 @@ public class OzoneKey {
     return replicationConfig;
   }
 
+  /**
+   * Returns indicator if key is a file.
+   * @return file
+   */
+  public boolean isFile() {
+    return isFile;
+  }
+
+  /**
+   * Constructs OzoneKey from OmKeyInfo.
+   *
+   */
   public static OzoneKey fromKeyInfo(OmKeyInfo keyInfo) {
     return new OzoneKey(keyInfo.getVolumeName(), keyInfo.getBucketName(),
         keyInfo.getKeyName(), keyInfo.getDataSize(), keyInfo.getCreationTime(),
         keyInfo.getModificationTime(), keyInfo.getReplicationConfig(),
-        keyInfo.getMetadata());
+        keyInfo.getMetadata(), keyInfo.isFile(), keyInfo.getOwnerName(),
+        keyInfo.getTags());
   }
 
 }

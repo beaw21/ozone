@@ -25,16 +25,19 @@ import com.google.common.base.Preconditions;
 import org.apache.hadoop.hdds.conf.ConfigurationSource;
 import org.apache.hadoop.hdds.scm.ScmConfigKeys;
 import org.apache.hadoop.hdds.scm.server.StorageContainerManager;
-import org.apache.hadoop.hdds.security.x509.SecurityConfig;
+import org.apache.hadoop.hdds.security.SecurityConfig;
 import org.apache.hadoop.hdds.security.x509.certificate.client.CertificateClient;
 import org.apache.hadoop.ozone.OzoneConsts;
 import org.apache.ratis.thirdparty.io.grpc.Server;
 import org.apache.ratis.thirdparty.io.grpc.ServerBuilder;
 import org.apache.ratis.thirdparty.io.grpc.netty.GrpcSslContexts;
 import org.apache.ratis.thirdparty.io.grpc.netty.NettyServerBuilder;
+import org.apache.ratis.thirdparty.io.netty.handler.ssl.ClientAuth;
 import org.apache.ratis.thirdparty.io.netty.handler.ssl.SslContextBuilder;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+
+import static org.apache.ratis.thirdparty.io.netty.handler.ssl.SslContextBuilder.forServer;
 
 /**
  * Service to serve SCM DB checkpoints available for SCM HA.
@@ -48,8 +51,8 @@ public class InterSCMGrpcProtocolService {
   private Server server;
   private final AtomicBoolean isStarted = new AtomicBoolean(false);
 
-  public InterSCMGrpcProtocolService(final ConfigurationSource conf,
-      final StorageContainerManager scm) {
+  InterSCMGrpcProtocolService(final ConfigurationSource conf,
+      final StorageContainerManager scm) throws IOException {
     Preconditions.checkNotNull(conf);
     this.port = conf.getInt(ScmConfigKeys.OZONE_SCM_GRPC_PORT_KEY,
         ScmConfigKeys.OZONE_SCM_GRPC_PORT_DEFAULT);
@@ -67,10 +70,11 @@ public class InterSCMGrpcProtocolService {
       try {
         CertificateClient certClient = scm.getScmCertificateClient();
         SslContextBuilder sslServerContextBuilder =
-            SslContextBuilder.forServer(
-                certClient.getServerKeyStoresFactory().getKeyManagers()[0]);
+            forServer(certClient.getKeyManager())
+                .trustManager(certClient.getTrustManager());
         SslContextBuilder sslContextBuilder = GrpcSslContexts.configure(
             sslServerContextBuilder, securityConfig.getGrpcSslProvider());
+        sslContextBuilder.clientAuth(ClientAuth.REQUIRE);
         nettyServerBuilder.sslContext(sslContextBuilder.build());
       } catch (Exception ex) {
         LOG.error("Unable to setup TLS for secure " +

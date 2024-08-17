@@ -20,18 +20,28 @@ package org.apache.hadoop.fs.ozone;
 
 import java.io.IOException;
 import java.io.InputStream;
-import java.io.OutputStream;
 import java.net.URI;
+import java.util.List;
 
+import com.google.common.base.Strings;
 import org.apache.hadoop.crypto.key.KeyProvider;
 import org.apache.hadoop.crypto.key.KeyProviderTokenIssuer;
 import org.apache.hadoop.fs.FileSystem;
+import org.apache.hadoop.fs.LeaseRecoverable;
 import org.apache.hadoop.fs.Path;
+import org.apache.hadoop.fs.SafeMode;
+import org.apache.hadoop.fs.SafeModeAction;
 import org.apache.hadoop.fs.StorageStatistics;
 import org.apache.hadoop.hdds.annotation.InterfaceAudience;
 import org.apache.hadoop.hdds.annotation.InterfaceStability;
 import org.apache.hadoop.hdds.conf.ConfigurationSource;
+import org.apache.hadoop.ozone.om.exceptions.OMException;
+import org.apache.hadoop.ozone.om.helpers.LeaseKeyInfo;
+import org.apache.hadoop.ozone.om.helpers.OmKeyArgs;
+import org.apache.hadoop.ozone.om.helpers.OmKeyLocationInfo;
 import org.apache.hadoop.security.token.DelegationTokenIssuer;
+
+import static org.apache.hadoop.ozone.OzoneConsts.FORCE_LEASE_RECOVERY_ENV;
 
 /**
  * The Ozone Filesystem implementation.
@@ -44,12 +54,15 @@ import org.apache.hadoop.security.token.DelegationTokenIssuer;
 @InterfaceAudience.Private
 @InterfaceStability.Evolving
 public class OzoneFileSystem extends BasicOzoneFileSystem
-    implements KeyProviderTokenIssuer {
+    implements KeyProviderTokenIssuer, LeaseRecoverable, SafeMode {
 
   private OzoneFSStorageStatistics storageStatistics;
+  private boolean forceRecovery;
 
   public OzoneFileSystem() {
     this.storageStatistics = new OzoneFSStorageStatistics();
+    String force = System.getProperty(FORCE_LEASE_RECOVERY_ENV);
+    forceRecovery = Strings.isNullOrEmpty(force) ? false : Boolean.parseBoolean(force);
   }
 
   @Override
@@ -104,7 +117,7 @@ public class OzoneFileSystem extends BasicOzoneFileSystem
   }
 
   @Override
-  protected OutputStream createFSOutputStream(
+  protected OzoneFSOutputStream createFSOutputStream(
           OzoneFSOutputStream outputStream) {
     return new CapableOzoneFSOutputStream(outputStream, isHsyncEnabled());
   }
@@ -120,5 +133,51 @@ public class OzoneFileSystem extends BasicOzoneFileSystem
       return cap;
     }
     return super.hasPathCapability(p, capability);
+  }
+
+  @Override
+  public boolean recoverLease(Path f) throws IOException {
+    statistics.incrementWriteOps(1);
+    LOG.trace("recoverLease() path:{}", f);
+
+    Path qualifiedPath = makeQualified(f);
+    String key = pathToKey(qualifiedPath);
+    LeaseKeyInfo leaseKeyInfo;
+    try {
+      leaseKeyInfo = getAdapter().recoverFilePrepare(key, forceRecovery);
+    } catch (OMException e) {
+      if (e.getResult() == OMException.ResultCodes.KEY_ALREADY_CLOSED) {
+        // key is already closed, let's just return success
+        return true;
+      }
+      throw e;
+    }
+
+    // Get keyLocationInfo
+    List<OmKeyLocationInfo> keyLocationInfoList = LeaseRecoveryClientDNHandler.getOmKeyLocationInfos(
+        leaseKeyInfo, getAdapter(), forceRecovery);
+    // recover and commit file
+    long keyLength = keyLocationInfoList.stream().mapToLong(OmKeyLocationInfo::getLength).sum();
+    OmKeyArgs keyArgs = new OmKeyArgs.Builder().setVolumeName(leaseKeyInfo.getKeyInfo().getVolumeName())
+        .setBucketName(leaseKeyInfo.getKeyInfo().getBucketName()).setKeyName(leaseKeyInfo.getKeyInfo().getKeyName())
+        .setReplicationConfig(leaseKeyInfo.getKeyInfo().getReplicationConfig()).setDataSize(keyLength)
+        .setLocationInfoList(keyLocationInfoList)
+        .build();
+    getAdapter().recoverFile(keyArgs);
+    return true;
+  }
+
+  @Override
+  public boolean isFileClosed(Path f) throws IOException {
+    LOG.trace("isFileClosed() path:{}", f);
+    Path qualifiedPath = makeQualified(f);
+    String key = pathToKey(qualifiedPath);
+    return getAdapter().isFileClosed(key);
+  }
+
+  @Override
+  public boolean setSafeMode(SafeModeAction action, boolean isChecked)
+      throws IOException {
+    return setSafeModeUtil(action, isChecked);
   }
 }

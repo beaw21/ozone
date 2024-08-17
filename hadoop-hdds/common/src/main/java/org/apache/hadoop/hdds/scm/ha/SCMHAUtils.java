@@ -65,7 +65,7 @@ public final class SCMHAUtils {
   public static final Logger LOG =
       LoggerFactory.getLogger(SCMHAUtils.class);
 
-  private static final List<Class<? extends Exception>>
+  private static final ImmutableList<Class<? extends Exception>>
       RETRIABLE_WITH_NO_FAILOVER_EXCEPTION_LIST =
       ImmutableList.<Class<? extends Exception>>builder()
           .add(LeaderNotReadyException.class)
@@ -74,7 +74,7 @@ public final class SCMHAUtils {
           .add(ResourceUnavailableException.class)
           .build();
 
-  private static final List<Class<? extends Exception>>
+  private static final ImmutableList<Class<? extends Exception>>
       NON_RETRIABLE_EXCEPTION_LIST =
       ImmutableList.<Class<? extends Exception>>builder()
           .add(SCMException.class)
@@ -115,10 +115,6 @@ public final class SCMHAUtils {
     return conf.getTrimmedStringCollection(key);
   }
 
-  public static String  getLocalSCMNodeId(String scmServiceId) {
-    return addSuffix(ScmConfigKeys.OZONE_SCM_NODES_KEY, scmServiceId);
-  }
-
   /**
    * Add non empty and non null suffix to a key.
    */
@@ -142,6 +138,15 @@ public final class SCMHAUtils {
       scmRatisDirectory = ServerUtils.getDefaultRatisDirectory(conf);
     }
     return scmRatisDirectory;
+  }
+
+  public static String getRatisStorageDir(final ConfigurationSource conf) {
+    String storageDir = conf.get(ScmConfigKeys.OZONE_SCM_HA_RATIS_STORAGE_DIR);
+    if (Strings.isNullOrEmpty(storageDir)) {
+      File metaDirPath = ServerUtils.getOzoneMetaDirPath(conf);
+      storageDir = (new File(metaDirPath, "scm-ha")).getPath();
+    }
+    return storageDir;
   }
 
   public static String getSCMRatisSnapshotDirectory(ConfigurationSource conf) {
@@ -311,7 +316,7 @@ public final class SCMHAUtils {
     return null;
   }
 
-  public static List<Class<? extends
+  private static List<Class<? extends
       Exception>> getRetriableWithNoFailoverExceptionList() {
     return RETRIABLE_WITH_NO_FAILOVER_EXCEPTION_LIST;
   }

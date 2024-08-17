@@ -16,6 +16,8 @@
  */
 package org.apache.hadoop.ozone.conf;
 
+import java.net.InetSocketAddress;
+import java.util.Collection;
 import java.util.concurrent.Callable;
 import org.apache.hadoop.hdds.cli.HddsVersionProvider;
 import org.apache.hadoop.hdds.conf.ConfigurationSource;
@@ -23,14 +25,15 @@ import org.apache.hadoop.hdds.conf.OzoneConfiguration;
 import org.apache.hadoop.ozone.OmUtils;
 import picocli.CommandLine.Command;
 import picocli.CommandLine.ParentCommand;
+import static java.util.stream.Collectors.toList;
+import static org.apache.hadoop.ozone.OmUtils.getOmHAAddressesById;
 
 /**
  * Handler for ozone getconf ozonemanagers.
  */
 @Command(name = "ozonemanagers",
     aliases = {"-ozonemanagers"},
-    description = "gets list of ozone storage container "
-        + "manager nodes in the cluster",
+    description = "gets list of Ozone Manager nodes in the cluster",
     mixinStandardHelpOptions = true,
     versionProvider = HddsVersionProvider.class)
 public class OzoneManagersCommandHandler implements Callable<Void> {
@@ -44,7 +47,13 @@ public class OzoneManagersCommandHandler implements Callable<Void> {
         OzoneConfiguration.of(tool.getConf());
     if (OmUtils.isServiceIdsDefined(
         configSource)) {
-      tool.printOut(OmUtils.getOmHAAddressesById(configSource).toString());
+      Collection<InetSocketAddress> omAddresses =
+          getOmHAAddressesById(configSource)
+              .values().stream().flatMap(Collection::stream)
+              .collect(toList());
+      for (InetSocketAddress addr : omAddresses) {
+        tool.printOut(addr.getHostName());
+      }
     } else {
       tool.printOut(OmUtils.getOmAddress(configSource).getHostName());
     }

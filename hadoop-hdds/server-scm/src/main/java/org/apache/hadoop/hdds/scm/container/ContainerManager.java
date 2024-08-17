@@ -22,7 +22,6 @@ import java.util.Collections;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
-import java.util.concurrent.TimeoutException;
 
 import org.apache.hadoop.hdds.client.ReplicationConfig;
 import org.apache.hadoop.hdds.protocol.proto.HddsProtos.LifeCycleState;
@@ -119,7 +118,7 @@ public interface ContainerManager extends Closeable {
    */
   ContainerInfo allocateContainer(ReplicationConfig replicationConfig,
                                   String owner)
-      throws IOException, TimeoutException;
+      throws IOException;
 
   /**
    * Update container state.
@@ -130,7 +129,17 @@ public interface ContainerManager extends Closeable {
    */
   void updateContainerState(ContainerID containerID,
                             LifeCycleEvent event)
-      throws IOException, InvalidStateTransitionException, TimeoutException;
+      throws IOException, InvalidStateTransitionException;
+
+  /**
+   * Bypasses the container state machine to change a container's state from DELETING to CLOSED. This API was
+   * introduced to fix a bug (HDDS-11136), and should be used with care otherwise.
+   *
+   * @see <a href="https://issues.apache.org/jira/browse/HDDS-11136">HDDS-11136</a>
+   * @param containerID id of the container to transition
+   * @throws IOException
+   */
+  void transitionDeletingToClosedState(ContainerID containerID) throws IOException;
 
   /**
    * Returns the latest list of replicas for given containerId.
@@ -203,7 +212,7 @@ public interface ContainerManager extends Closeable {
    * @throws IOException
    */
   void deleteContainer(ContainerID containerID)
-      throws IOException, TimeoutException;
+      throws IOException;
 
   /**
    * Returns containerStateManger.

@@ -19,6 +19,7 @@ package org.apache.hadoop.ozone.s3.endpoint;
 
 import javax.annotation.PostConstruct;
 import javax.inject.Inject;
+import javax.ws.rs.core.HttpHeaders;
 import javax.ws.rs.core.MultivaluedMap;
 import javax.ws.rs.core.Response;
 import javax.ws.rs.container.ContainerRequestContext;
@@ -40,6 +41,7 @@ import org.apache.hadoop.ozone.OzoneConsts;
 import org.apache.hadoop.ozone.audit.AuditAction;
 import org.apache.hadoop.ozone.audit.AuditEventStatus;
 import org.apache.hadoop.ozone.audit.AuditLogger;
+import org.apache.hadoop.ozone.audit.AuditLogger.PerformanceStringBuilder;
 import org.apache.hadoop.ozone.audit.AuditLoggerType;
 import org.apache.hadoop.ozone.audit.AuditMessage;
 import org.apache.hadoop.ozone.audit.Auditor;
@@ -57,30 +59,44 @@ import org.apache.hadoop.ozone.s3.exception.S3ErrorTable;
 import com.google.common.annotations.VisibleForTesting;
 
 import org.apache.hadoop.ozone.s3.metrics.S3GatewayMetrics;
+import org.apache.hadoop.ozone.s3.signature.SignatureInfo;
 import org.apache.hadoop.ozone.s3.util.AuditUtils;
 import org.apache.hadoop.util.Time;
+import org.apache.http.NameValuePair;
+import org.apache.http.client.utils.URLEncodedUtils;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import static java.nio.charset.StandardCharsets.UTF_8;
+import static org.apache.hadoop.ozone.OzoneConsts.ETAG;
 import static org.apache.hadoop.ozone.OzoneConsts.KB;
+import static org.apache.hadoop.ozone.s3.exception.S3ErrorTable.INVALID_TAG;
 import static org.apache.hadoop.ozone.s3.exception.S3ErrorTable.newError;
 import static org.apache.hadoop.ozone.s3.util.S3Consts.CUSTOM_METADATA_HEADER_PREFIX;
+import static org.apache.hadoop.ozone.s3.util.S3Consts.TAG_HEADER;
+import static org.apache.hadoop.ozone.s3.util.S3Consts.TAG_KEY_LENGTH_LIMIT;
+import static org.apache.hadoop.ozone.s3.util.S3Consts.TAG_NUM_LIMIT;
+import static org.apache.hadoop.ozone.s3.util.S3Consts.TAG_REGEX_PATTERN;
+import static org.apache.hadoop.ozone.s3.util.S3Consts.TAG_VALUE_LENGTH_LIMIT;
 
 /**
  * Basic helpers for all the REST endpoints.
  */
 public abstract class EndpointBase implements Auditor {
 
+  protected static final String ETAG_CUSTOM = "etag-custom";
+
   @Inject
   private OzoneClient client;
   @Inject
+  private SignatureInfo signatureInfo;
+
   private S3Auth s3Auth;
   @Context
   private ContainerRequestContext context;
 
   private Set<String> excludeMetadataFields =
-          new HashSet<>(Arrays.asList(OzoneConsts.GDPR_FLAG));
+      new HashSet<>(Arrays.asList(OzoneConsts.GDPR_FLAG));
   private static final Logger LOG =
       LoggerFactory.getLogger(EndpointBase.class);
 
@@ -114,10 +130,16 @@ public abstract class EndpointBase implements Auditor {
    */
   @PostConstruct
   public void initialization() {
+    // Note: userPrincipal is initialized to be the same value as accessId,
+    //  could be updated later in RpcClient#getS3Volume
+    s3Auth = new S3Auth(signatureInfo.getStringToSign(),
+        signatureInfo.getSignature(),
+        signatureInfo.getAwsAccessId(), signatureInfo.getAwsAccessId());
     LOG.debug("S3 access id: {}", s3Auth.getAccessID());
-    getClient().getObjectStore()
-        .getClientProxy()
-        .setThreadLocalS3Auth(s3Auth);
+    ClientProtocol clientProtocol =
+        getClient().getObjectStore().getClientProxy();
+    clientProtocol.setThreadLocalS3Auth(s3Auth);
+    clientProtocol.setIsS3Request(true);
     init();
   }
 
@@ -173,9 +195,9 @@ public abstract class EndpointBase implements Auditor {
       } else if (ex.getResult() == ResultCodes.TIMEOUT ||
           ex.getResult() == ResultCodes.INTERNAL_ERROR) {
         throw newError(S3ErrorTable.INTERNAL_ERROR, bucketName, ex);
-      } else if (ex.getResult() != ResultCodes.BUCKET_ALREADY_EXISTS) {
-        // S3 does not return error for bucket already exists, it just
-        // returns the location.
+      } else if (ex.getResult() == ResultCodes.BUCKET_ALREADY_EXISTS) {
+        throw newError(S3ErrorTable.BUCKET_ALREADY_EXISTS, bucketName, ex);
+      } else {
         throw ex;
       }
     }
@@ -290,12 +312,25 @@ public abstract class EndpointBase implements Auditor {
 
         if (sizeInBytes >
                 OzoneConsts.S3_REQUEST_HEADER_METADATA_SIZE_LIMIT_KB * KB) {
-          throw new IllegalArgumentException("Illegal user defined metadata." +
-              " Combined size cannot exceed 2KB.");
+          throw newError(S3ErrorTable.METADATA_TOO_LARGE, key);
         }
         customMetadata.put(mapKey, value);
       }
     }
+
+    // If the request contains a custom metadata header "x-amz-meta-ETag",
+    // replace the metadata key to "etag-custom" to prevent key metadata collision with
+    // the ETag calculated by hashing the object when storing the key in OM table.
+    // The custom ETag metadata header will be rebuilt during the headObject operation.
+    if (customMetadata.containsKey(HttpHeaders.ETAG)
+        || customMetadata.containsKey(HttpHeaders.ETAG.toLowerCase())) {
+      String customETag = customMetadata.get(HttpHeaders.ETAG) != null ?
+          customMetadata.get(HttpHeaders.ETAG) : customMetadata.get(HttpHeaders.ETAG.toLowerCase());
+      customMetadata.remove(HttpHeaders.ETAG);
+      customMetadata.remove(HttpHeaders.ETAG.toLowerCase());
+      customMetadata.put(ETAG_CUSTOM, customETag);
+    }
+
     return customMetadata;
   }
 
@@ -304,10 +339,94 @@ public abstract class EndpointBase implements Auditor {
 
     Map<String, String> metadata = key.getMetadata();
     for (Map.Entry<String, String> entry : metadata.entrySet()) {
+      if (entry.getKey().equals(ETAG)) {
+        continue;
+      }
+      String metadataKey = entry.getKey();
+      if (metadataKey.equals(ETAG_CUSTOM)) {
+        // Rebuild the ETag custom metadata header
+        metadataKey = ETAG.toLowerCase();
+      }
       responseBuilder
-          .header(CUSTOM_METADATA_HEADER_PREFIX + entry.getKey(),
+          .header(CUSTOM_METADATA_HEADER_PREFIX + metadataKey,
               entry.getValue());
     }
+  }
+
+  protected Map<String, String> getTaggingFromHeaders(HttpHeaders httpHeaders)
+      throws OS3Exception {
+    String tagString = httpHeaders.getHeaderString(TAG_HEADER);
+
+    if (StringUtils.isEmpty(tagString)) {
+      return Collections.emptyMap();
+    }
+
+    List<NameValuePair> tagPairs = URLEncodedUtils.parse(tagString, UTF_8);
+
+    if (tagPairs.isEmpty()) {
+      return Collections.emptyMap();
+    }
+
+    Map<String, String> tags = new HashMap<>();
+    // Tag restrictions: https://docs.aws.amazon.com/AmazonS3/latest/API/API_control_S3Tag.html
+    for (NameValuePair tagPair: tagPairs) {
+      if (StringUtils.isEmpty(tagPair.getName())) {
+        OS3Exception ex = newError(INVALID_TAG, TAG_HEADER);
+        ex.setErrorMessage("Some tag keys are empty, please specify the non-empty tag keys");
+        throw ex;
+      }
+
+      if (tagPair.getValue() == null) {
+        // For example for query parameter with only value (e.g. "tag1")
+        OS3Exception ex = newError(INVALID_TAG, tagPair.getName());
+        ex.setErrorMessage("Some tag values are not specified, please specify the tag values");
+        throw ex;
+      }
+
+      if (tags.containsKey(tagPair.getName())) {
+        // Tags that are associated with an object must have unique tag keys
+        // Reject request if the same key is used twice on the same resource
+        OS3Exception ex = newError(INVALID_TAG, tagPair.getName());
+        ex.setErrorMessage("There are tags with duplicate tag keys, tag keys should be unique");
+        throw ex;
+      }
+
+      if (tagPair.getName().length() > TAG_KEY_LENGTH_LIMIT) {
+        OS3Exception ex = newError(INVALID_TAG, tagPair.getName());
+        ex.setErrorMessage("The tag key exceeds the maximum length of " + TAG_KEY_LENGTH_LIMIT);
+        throw ex;
+      }
+
+      if (tagPair.getValue().length() > TAG_VALUE_LENGTH_LIMIT) {
+        OS3Exception ex = newError(INVALID_TAG, tagPair.getValue());
+        ex.setErrorMessage("The tag value exceeds the maximum length of " + TAG_VALUE_LENGTH_LIMIT);
+        throw ex;
+      }
+
+      if (!TAG_REGEX_PATTERN.matcher(tagPair.getName()).matches()) {
+        OS3Exception ex = newError(INVALID_TAG, tagPair.getName());
+        ex.setErrorMessage("The tag key does not have a valid pattern");
+        throw ex;
+      }
+
+      if (!TAG_REGEX_PATTERN.matcher(tagPair.getValue()).matches()) {
+        OS3Exception ex = newError(INVALID_TAG, tagPair.getValue());
+        ex.setErrorMessage("The tag value does not have a valid pattern");
+        throw ex;
+      }
+
+      tags.put(tagPair.getName(), tagPair.getValue());
+    }
+
+    if (tags.size() > TAG_NUM_LIMIT) {
+      // You can associate up to 10 tags with an object.
+      OS3Exception ex = S3ErrorTable.newError(INVALID_TAG, TAG_HEADER);
+      ex.setErrorMessage("The number of tags " + tags.size() +
+          " exceeded the maximum number of tags of " + TAG_NUM_LIMIT);
+      throw ex;
+    }
+
+    return tags;
   }
 
   private AuditMessage.Builder auditMessageBaseBuilder(AuditAction op,
@@ -331,6 +450,14 @@ public abstract class EndpointBase implements Auditor {
       Map<String, String> auditMap) {
     AuditMessage.Builder builder = auditMessageBaseBuilder(op, auditMap)
         .withResult(AuditEventStatus.SUCCESS);
+    return builder.build();
+  }
+
+  public AuditMessage buildAuditMessageForSuccess(AuditAction op,
+      Map<String, String> auditMap, PerformanceStringBuilder performance) {
+    AuditMessage.Builder builder = auditMessageBaseBuilder(op, auditMap)
+        .withResult(AuditEventStatus.SUCCESS);
+    builder.setPerformance(performance);
     return builder.build();
   }
 
@@ -359,7 +486,7 @@ public abstract class EndpointBase implements Auditor {
 
   @VisibleForTesting
   public S3GatewayMetrics getMetrics() {
-    return S3GatewayMetrics.create();
+    return S3GatewayMetrics.getMetrics();
   }
 
   protected Map<String, String> getAuditParameters() {

@@ -23,6 +23,8 @@ import java.net.InetAddress;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.List;
+
+import org.apache.commons.lang3.StringUtils;
 import org.apache.hadoop.hdds.cli.HddsVersionProvider;
 import org.apache.hadoop.hdds.conf.OzoneConfiguration;
 import org.apache.hadoop.ozone.OmUtils;
@@ -31,7 +33,6 @@ import org.apache.hadoop.ozone.om.helpers.OMNodeDetails;
 import org.apache.hadoop.ozone.om.protocol.OMConfiguration;
 import org.apache.hadoop.ozone.om.protocolPB.OMAdminProtocolClientSideImpl;
 import org.apache.hadoop.security.UserGroupInformation;
-import org.apache.logging.log4j.util.Strings;
 import picocli.CommandLine;
 
 import java.util.concurrent.Callable;
@@ -155,8 +156,8 @@ public class DecommissionOMSubcommand implements Callable<Void> {
   private void verifyConfigUpdatedOnAllOMs() throws IOException {
     String decommNodesKey = ConfUtils.addKeySuffixes(
         OZONE_OM_DECOMMISSIONED_NODES_KEY, omServiceId);
-    Collection<String> decommNodes = ozoneConf.getTrimmedStringCollection(
-        decommNodesKey);
+    Collection<String> decommNodes =
+        OmUtils.getDecommissionedNodeIds(ozoneConf, decommNodesKey);
     if (!decommNodes.contains(decommNodeId)) {
       throw new IOException("Please add the to be decommissioned OM "
           + decommNodeId + " to the " + decommNodesKey + " config in " +
@@ -180,7 +181,7 @@ public class DecommissionOMSubcommand implements Callable<Void> {
       }
     }
     if (!staleOMConfigs.isEmpty()) {
-      throw new IOException("OM(s) " + Strings.join(staleOMConfigs, ',') +
+      throw new IOException("OM(s) " + StringUtils.join(staleOMConfigs, ',') +
           " have not been updated with decommissioned nodes list or their" +
           " address for the decommissioning node does not match");
     }

@@ -26,15 +26,17 @@ import org.apache.hadoop.hdds.client.ECReplicationConfig;
 import org.apache.hadoop.hdds.conf.ConfigurationSource;
 import org.apache.hadoop.hdds.protocol.DatanodeDetails;
 import org.apache.hadoop.hdds.protocol.datanode.proto.ContainerProtos;
-import org.apache.hadoop.hdds.scm.ByteStringConversion;
 import org.apache.hadoop.hdds.scm.ContainerClientMetrics;
 import org.apache.hadoop.hdds.scm.OzoneClientConfig;
+import org.apache.hadoop.hdds.scm.StreamBufferArgs;
 import org.apache.hadoop.hdds.scm.container.ContainerID;
 import org.apache.hadoop.hdds.scm.pipeline.Pipeline;
 import org.apache.hadoop.hdds.scm.pipeline.PipelineID;
 import org.apache.hadoop.hdds.scm.storage.BlockLocationInfo;
 import org.apache.hadoop.hdds.scm.storage.BufferPool;
 import org.apache.hadoop.hdds.scm.storage.ECBlockOutputStream;
+import org.apache.hadoop.hdds.security.SecurityConfig;
+import org.apache.hadoop.hdds.security.symmetric.SecretKeySignerClient;
 import org.apache.hadoop.hdds.security.token.ContainerTokenIdentifier;
 import org.apache.hadoop.hdds.security.x509.certificate.client.CertificateClient;
 import org.apache.hadoop.hdds.utils.IOUtils;
@@ -48,6 +50,7 @@ import org.apache.hadoop.ozone.client.io.ECBlockReconstructedStripeInputStream;
 import org.apache.hadoop.ozone.container.common.helpers.BlockData;
 import org.apache.hadoop.ozone.container.common.statemachine.StateContext;
 import org.apache.hadoop.security.token.Token;
+import org.apache.ratis.util.MemoizedSupplier;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -55,12 +58,14 @@ import java.io.Closeable;
 import java.io.IOException;
 import java.nio.ByteBuffer;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.HashMap;
 import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.OptionalLong;
+import java.util.Set;
 import java.util.SortedMap;
 import java.util.TreeMap;
 import java.util.concurrent.CompletableFuture;
@@ -97,38 +102,43 @@ public class ECReconstructionCoordinator implements Closeable {
 
   private static final int EC_RECONSTRUCT_STRIPE_READ_POOL_MIN_SIZE = 3;
 
+  private static final int EC_RECONSTRUCT_STRIPE_WRITE_POOL_MIN_SIZE = 5;
+
   private final ECContainerOperationClient containerOperationClient;
 
   private final ByteBufferPool byteBufferPool;
-  private final CertificateClient certificateClient;
 
-  private final ExecutorService ecReconstructExecutor;
-
+  private final ExecutorService ecReconstructReadExecutor;
+  private final MemoizedSupplier<ExecutorService> ecReconstructWriteExecutor;
   private final BlockInputStreamFactory blockInputStreamFactory;
   private final TokenHelper tokenHelper;
   private final ContainerClientMetrics clientMetrics;
   private final ECReconstructionMetrics metrics;
   private final StateContext context;
+  private final OzoneClientConfig ozoneClientConfig;
 
-  public ECReconstructionCoordinator(ConfigurationSource conf,
-      CertificateClient certificateClient,
-      StateContext context,
-      ECReconstructionMetrics metrics) throws IOException {
+  public ECReconstructionCoordinator(
+      ConfigurationSource conf, CertificateClient certificateClient,
+      SecretKeySignerClient secretKeyClient, StateContext context,
+      ECReconstructionMetrics metrics,
+      String threadNamePrefix) throws IOException {
     this.context = context;
     this.containerOperationClient = new ECContainerOperationClient(conf,
         certificateClient);
     this.byteBufferPool = new ElasticByteBufferPool();
-    this.certificateClient = certificateClient;
-    this.ecReconstructExecutor =
-        new ThreadPoolExecutor(EC_RECONSTRUCT_STRIPE_READ_POOL_MIN_SIZE,
-            conf.getObject(OzoneClientConfig.class)
-                .getEcReconstructStripeReadPoolLimit(), 60, TimeUnit.SECONDS,
-            new SynchronousQueue<>(), new ThreadFactoryBuilder()
-            .setNameFormat("ec-reconstruct-reader-TID-%d").build(),
-            new ThreadPoolExecutor.CallerRunsPolicy());
+    ozoneClientConfig = conf.getObject(OzoneClientConfig.class);
+    this.ecReconstructReadExecutor = createThreadPoolExecutor(
+        EC_RECONSTRUCT_STRIPE_READ_POOL_MIN_SIZE,
+        ozoneClientConfig.getEcReconstructStripeReadPoolLimit(),
+        threadNamePrefix + "ec-reconstruct-reader-TID-%d");
+    this.ecReconstructWriteExecutor = MemoizedSupplier.valueOf(
+        () -> createThreadPoolExecutor(
+            EC_RECONSTRUCT_STRIPE_WRITE_POOL_MIN_SIZE,
+            ozoneClientConfig.getEcReconstructStripeWritePoolLimit(),
+            threadNamePrefix + "ec-reconstruct-writer-TID-%d"));
     this.blockInputStreamFactory = BlockInputStreamFactoryImpl
-        .getInstance(byteBufferPool, () -> ecReconstructExecutor);
-    tokenHelper = new TokenHelper(conf, certificateClient);
+        .getInstance(byteBufferPool, () -> ecReconstructReadExecutor);
+    tokenHelper = new TokenHelper(new SecurityConfig(conf), secretKeyClient);
     this.clientMetrics = ContainerClientMetrics.acquire();
     this.metrics = metrics;
   }
@@ -154,7 +164,9 @@ public class ECReconstructionCoordinator implements Closeable {
       for (Map.Entry<Integer, DatanodeDetails> indexDnPair : targetNodeMap
           .entrySet()) {
         DatanodeDetails dn = indexDnPair.getValue();
-        Integer index = indexDnPair.getKey();
+        int index = indexDnPair.getKey();
+        LOG.debug("Creating container {} on datanode {} for index {}",
+            containerID, dn, index);
         containerOperationClient
             .createRecoveringContainer(containerID, dn, repConfig,
                 containerToken, index);
@@ -172,6 +184,7 @@ public class ECReconstructionCoordinator implements Closeable {
 
       // 3. Close containers
       for (DatanodeDetails dn: recoveringContainersCreatedDNs) {
+        LOG.debug("Closing container {} on datanode {}", containerID, dn);
         containerOperationClient
             .closeContainer(containerID, dn, repConfig, containerToken);
       }
@@ -209,16 +222,18 @@ public class ECReconstructionCoordinator implements Closeable {
 
   }
 
-  ECBlockOutputStream getECBlockOutputstream(
+  private ECBlockOutputStream getECBlockOutputStream(
       BlockLocationInfo blockLocationInfo, DatanodeDetails datanodeDetails,
-      ECReplicationConfig repConfig, int replicaIndex, BufferPool bufferPool,
-      OzoneClientConfig configuration) throws IOException {
-    return new ECBlockOutputStream(blockLocationInfo.getBlockID(),
-            this.containerOperationClient.getXceiverClientManager(),
-            this.containerOperationClient
-                    .singleNodePipeline(datanodeDetails, repConfig,
-                            replicaIndex), bufferPool, configuration,
-            blockLocationInfo.getToken(), clientMetrics);
+      ECReplicationConfig repConfig, int replicaIndex) throws IOException {
+    StreamBufferArgs streamBufferArgs =
+        StreamBufferArgs.getDefaultStreamBufferArgs(repConfig, ozoneClientConfig);
+    return new ECBlockOutputStream(
+        blockLocationInfo.getBlockID(),
+        containerOperationClient.getXceiverClientManager(),
+        containerOperationClient.singleNodePipeline(datanodeDetails,
+            repConfig, replicaIndex),
+        BufferPool.empty(), ozoneClientConfig,
+        blockLocationInfo.getToken(), clientMetrics, streamBufferArgs, ecReconstructWriteExecutor);
   }
 
   @VisibleForTesting
@@ -233,85 +248,143 @@ public class ECReconstructionCoordinator implements Closeable {
     int dataLocs = ECBlockInputStreamProxy
         .expectedDataLocations(repConfig, safeBlockGroupLength);
     List<Integer> toReconstructIndexes = new ArrayList<>();
+    List<Integer> notReconstructIndexes = new ArrayList<>();
     for (Integer index : missingContainerIndexes) {
       if (index <= dataLocs || index > repConfig.getData()) {
         toReconstructIndexes.add(index);
+      } else {
+        // Don't need to be reconstructed, but we do need a stream to write
+        // the block data to.
+        notReconstructIndexes.add(index);
       }
-      // else padded indexes.
     }
 
-    // Looks like we don't need to reconstruct any missing blocks in this block
-    // group. The reason for this should be block group had only padding blocks
-    // in the missing locations.
-    if (toReconstructIndexes.size() == 0) {
-      if (LOG.isDebugEnabled()) {
-        LOG.debug("Skipping the reconstruction for the block: "
-            + blockLocationInfo.getBlockID() + ". In the missing locations: "
-            + missingContainerIndexes
-            + ", this block group has only padded blocks.");
-      }
-      return;
-    }
-
+    OzoneClientConfig clientConfig = this.ozoneClientConfig;
+    clientConfig.setChecksumVerify(true);
     try (ECBlockReconstructedStripeInputStream sis
         = new ECBlockReconstructedStripeInputStream(
-        repConfig, blockLocationInfo, true,
+        repConfig, blockLocationInfo,
         this.containerOperationClient.getXceiverClientManager(), null,
         this.blockInputStreamFactory, byteBufferPool,
-        this.ecReconstructExecutor)) {
+        this.ecReconstructReadExecutor,
+        clientConfig)) {
 
       ECBlockOutputStream[] targetBlockStreams =
           new ECBlockOutputStream[toReconstructIndexes.size()];
+      ECBlockOutputStream[] emptyBlockStreams =
+          new ECBlockOutputStream[notReconstructIndexes.size()];
       ByteBuffer[] bufs = new ByteBuffer[toReconstructIndexes.size()];
-      OzoneClientConfig configuration = new OzoneClientConfig();
-      // TODO: Let's avoid unnecessary bufferPool creation. This pool actually
-      //  not used in EC flows, but there are some dependencies on buffer pool.
-      BufferPool bufferPool =
-          new BufferPool(configuration.getStreamBufferSize(),
-              (int) (configuration.getStreamBufferMaxSize() / configuration
-                  .getStreamBufferSize()),
-              ByteStringConversion.createByteBufferConversion(false));
       try {
+        // Create streams and buffers for all indexes that need reconstructed
         for (int i = 0; i < toReconstructIndexes.size(); i++) {
           int replicaIndex = toReconstructIndexes.get(i);
-          DatanodeDetails datanodeDetails =
-              targetMap.get(replicaIndex);
-          targetBlockStreams[i] = getECBlockOutputstream(blockLocationInfo,
-              datanodeDetails, repConfig, replicaIndex, bufferPool,
-              configuration);
+          DatanodeDetails datanodeDetails = targetMap.get(replicaIndex);
+          targetBlockStreams[i] = getECBlockOutputStream(blockLocationInfo, datanodeDetails, repConfig, replicaIndex);
           bufs[i] = byteBufferPool.getBuffer(false, repConfig.getEcChunkSize());
-          // Make sure it's clean. Don't want to reuse the erroneously returned
-          // buffers from the pool.
           bufs[i].clear();
         }
-
-        sis.setRecoveryIndexes(toReconstructIndexes.stream().map(i -> (i - 1))
-            .collect(Collectors.toSet()));
-        long length = safeBlockGroupLength;
-        while (length > 0) {
-          int readLen = sis.recoverChunks(bufs);
-          // TODO: can be submitted in parallel
-          for (int i = 0; i < bufs.length; i++) {
-            CompletableFuture<ContainerProtos.ContainerCommandResponseProto>
-                future = targetBlockStreams[i].write(bufs[i]);
-            checkFailures(targetBlockStreams[i], future);
-            bufs[i].clear();
-          }
-          length -= readLen;
+        // Then create a stream for all indexes that don't need reconstructed, but still need a stream to
+        // write the empty block data to.
+        for (int i = 0; i < notReconstructIndexes.size(); i++) {
+          int replicaIndex = notReconstructIndexes.get(i);
+          DatanodeDetails datanodeDetails = targetMap.get(replicaIndex);
+          emptyBlockStreams[i] = getECBlockOutputStream(blockLocationInfo, datanodeDetails, repConfig, replicaIndex);
         }
 
-        for (ECBlockOutputStream targetStream : targetBlockStreams) {
-          targetStream.executePutBlock(true, true,
-              blockLocationInfo.getLength(), blockDataGroup);
-          checkFailures(targetStream,
-              targetStream.getCurrentPutBlkResponseFuture());
+        if (toReconstructIndexes.size() > 0) {
+          sis.setRecoveryIndexes(toReconstructIndexes.stream().map(i -> (i - 1))
+              .collect(Collectors.toSet()));
+          long length = safeBlockGroupLength;
+          while (length > 0) {
+            int readLen;
+            try {
+              readLen = sis.recoverChunks(bufs);
+              Set<Integer> failedIndexes = sis.getFailedIndexes();
+              if (!failedIndexes.isEmpty()) {
+                // There was a problem reading some of the block indexes, but we
+                // did not get an exception as there must have been spare indexes
+                // to try and recover from. Therefore we should log out the block
+                // group details in the same way as for the exception case below.
+                logBlockGroupDetails(blockLocationInfo, repConfig,
+                    blockDataGroup);
+              }
+            } catch (IOException e) {
+              // When we see exceptions here, it could be due to some transient
+              // issue that causes the block read to fail when reconstructing it,
+              // but we have seen issues where the containers don't have the
+              // blocks they appear they should have, or the block chunks are the
+              // wrong length etc. In order to debug these sort of cases, if we
+              // get an error, we will log out the details about the block group
+              // length on each source, along with their chunk list and chunk
+              // lengths etc.
+              logBlockGroupDetails(blockLocationInfo, repConfig,
+                  blockDataGroup);
+              throw e;
+            }
+            // TODO: can be submitted in parallel
+            for (int i = 0; i < bufs.length; i++) {
+              if (bufs[i].remaining() != 0) {
+                // If the buffer is empty, we don't need to write it as it will cause
+                // an empty chunk to be added to the end of the block.
+                CompletableFuture<ContainerProtos.ContainerCommandResponseProto>
+                    future = targetBlockStreams[i].write(bufs[i]);
+                checkFailures(targetBlockStreams[i], future);
+              }
+              bufs[i].clear();
+            }
+            length -= readLen;
+          }
+        }
+        List<ECBlockOutputStream> allStreams = new ArrayList<>(Arrays.asList(targetBlockStreams));
+        allStreams.addAll(Arrays.asList(emptyBlockStreams));
+        for (ECBlockOutputStream targetStream : allStreams) {
+          targetStream.executePutBlock(true, true, blockLocationInfo.getLength(), blockDataGroup);
+          checkFailures(targetStream, targetStream.getCurrentPutBlkResponseFuture());
         }
       } finally {
         for (ByteBuffer buf : bufs) {
           byteBufferPool.putBuffer(buf);
         }
         IOUtils.cleanupWithLogger(LOG, targetBlockStreams);
+        IOUtils.cleanupWithLogger(LOG, emptyBlockStreams);
       }
+    }
+  }
+
+  private void logBlockGroupDetails(BlockLocationInfo blockLocationInfo,
+      ECReplicationConfig repConfig, BlockData[] blockDataGroup) {
+    LOG.info("Block group details for {}. " +
+        "Replication Config {}. Calculated safe length: {}. ",
+        blockLocationInfo.getBlockID(), repConfig,
+        blockLocationInfo.getLength());
+    for (int i = 0; i < blockDataGroup.length; i++) {
+      BlockData data = blockDataGroup[i];
+      if (data == null) {
+        continue;
+      }
+      StringBuilder sb = new StringBuilder();
+      sb.append("Block Data for: ")
+          .append(data.getBlockID())
+          .append(" replica Index: ")
+          .append(i + 1)
+          .append(" block length: ")
+          .append(data.getSize())
+          .append(" block group length: ")
+          .append(getBlockDataLength(data))
+          .append(" chunk list: \n");
+      int cnt = 0;
+      for (ContainerProtos.ChunkInfo chunkInfo : data.getChunks()) {
+        if (cnt > 0) {
+          sb.append("\n");
+        }
+        sb.append("  chunkNum: ")
+            .append(++cnt)
+            .append(" length: ")
+            .append(chunkInfo.getLen())
+            .append(" offset: ")
+            .append(chunkInfo.getOffset());
+      }
+      LOG.info(sb.toString());
     }
   }
 
@@ -390,7 +463,9 @@ public class ECReconstructionCoordinator implements Closeable {
     if (containerOperationClient != null) {
       containerOperationClient.close();
     }
-    tokenHelper.stop();
+    if (ecReconstructWriteExecutor.isInitialized()) {
+      ecReconstructWriteExecutor.get().shutdownNow();
+    }
   }
 
   private Pipeline rebuildInputPipeline(ECReplicationConfig repConfig,
@@ -441,6 +516,36 @@ public class ECReconstructionCoordinator implements Closeable {
         resultMap.put(blockID.getLocalID(), blkDataArr);
       }
     }
+    // When a stripe is written, the put block is sent to all nodes even if
+    // that nodes has zero bytes written to it. If the
+    // client does not get an ACK from all nodes, it will abandon the stripe,
+    // which can leave incomplete stripes on the DNs. Therefore, we should check
+    // that all blocks in the result map have an entry for all nodes. If they
+    // do not, it means this is an abandoned stripe and we should not attempt
+    // to reconstruct it.
+    // Note that if some nodes report different values for the block length,
+    // it also indicate garbage data at the end of the block. A different part
+    // of the code handles this and only reconstructs the valid part of the
+    // block, ie the minimum length reported by the nodes.
+    Iterator<Map.Entry<Long, BlockData[]>> resultIterator
+        = resultMap.entrySet().iterator();
+    while (resultIterator.hasNext()) {
+      Map.Entry<Long, BlockData[]> entry = resultIterator.next();
+      BlockData[] blockDataArr = entry.getValue();
+      for (Map.Entry<Integer, DatanodeDetails> e : sourceNodeMap.entrySet()) {
+        // There should be an entry in the Array for each keyset node. If there
+        // is not, this is an orphaned stripe and we should remove it from the
+        // result.
+        if (blockDataArr[e.getKey() - 1] == null) {
+          LOG.warn("In container {} block {} does not have a putBlock entry " +
+              "for index {} on datanode {} making it an orphan block / " +
+              "stripe. It will not be reconstructed", containerID,
+              entry.getKey(), e.getKey(), e.getValue());
+          resultIterator.remove();
+          break;
+        }
+      }
+    }
     return resultMap;
   }
 
@@ -467,15 +572,22 @@ public class ECReconstructionCoordinator implements Closeable {
         continue;
       }
 
-      String putBlockLenStr = blockGroup[i].getMetadata()
-          .get(OzoneConsts.BLOCK_GROUP_LEN_KEY_IN_PUT_BLOCK);
-      long putBlockLen = (putBlockLenStr == null) ?
-          Long.MAX_VALUE :
-          Long.parseLong(putBlockLenStr);
-      // Use the min to be conservative
+      long putBlockLen = getBlockDataLength(blockGroup[i]);
+      // Use safe length is the minimum of the lengths recorded across the
+      // stripe
       blockGroupLen = Math.min(putBlockLen, blockGroupLen);
     }
     return blockGroupLen == Long.MAX_VALUE ? 0 : blockGroupLen;
+  }
+
+  private long getBlockDataLength(BlockData blockData) {
+    String lenStr = blockData.getMetadata()
+        .get(OzoneConsts.BLOCK_GROUP_LEN_KEY_IN_PUT_BLOCK);
+    // If we don't have the length, then it indicates a problem with the stripe.
+    // All replica should carry the length, so if it is not there, we return 0,
+    // which will cause us to set the length of the block to zero and not
+    // attempt to reconstruct it.
+    return (lenStr == null) ? 0 : Long.parseLong(lenStr);
   }
 
   public ECReconstructionMetrics getECReconstructionMetrics() {
@@ -486,5 +598,13 @@ public class ECReconstructionCoordinator implements Closeable {
     return Optional.ofNullable(context)
         .map(StateContext::getTermOfLeaderSCM)
         .orElse(OptionalLong.empty());
+  }
+
+  private static ExecutorService createThreadPoolExecutor(
+      int corePoolSize, int maximumPoolSize, String threadNameFormat) {
+    return new ThreadPoolExecutor(corePoolSize, maximumPoolSize,
+        60, TimeUnit.SECONDS, new SynchronousQueue<>(),
+        new ThreadFactoryBuilder().setNameFormat(threadNameFormat).build(),
+        new ThreadPoolExecutor.CallerRunsPolicy());
   }
 }

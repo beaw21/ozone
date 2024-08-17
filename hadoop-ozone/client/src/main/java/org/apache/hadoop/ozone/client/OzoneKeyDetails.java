@@ -21,9 +21,8 @@ package org.apache.hadoop.ozone.client;
 import com.fasterxml.jackson.annotation.JsonIgnore;
 import org.apache.hadoop.fs.FileEncryptionInfo;
 import org.apache.hadoop.hdds.client.ReplicationConfig;
-import org.apache.hadoop.hdds.client.ReplicationType;
-import org.apache.hadoop.hdds.function.SupplierWithIOException;
 import org.apache.hadoop.ozone.client.io.OzoneInputStream;
+import org.apache.ratis.util.function.CheckedSupplier;
 
 import java.io.IOException;
 import java.util.List;
@@ -37,29 +36,17 @@ public class OzoneKeyDetails extends OzoneKey {
   /**
    * A list of block location information to specify replica locations.
    */
-  private List<OzoneKeyLocation> ozoneKeyLocations;
+  private final List<OzoneKeyLocation> ozoneKeyLocations;
 
-  private FileEncryptionInfo feInfo;
+  private final FileEncryptionInfo feInfo;
 
-  private SupplierWithIOException<OzoneInputStream> contentSupplier;
+  private final CheckedSupplier<OzoneInputStream, IOException> contentSupplier;
 
   /**
-   * Constructs OzoneKeyDetails from OmKeyInfo.
+   * The generation of an existing key. This can be used with atomic commits, to
+   * ensure the key has not changed since the key details were read.
    */
-  @SuppressWarnings("parameternumber")
-  @Deprecated
-  public OzoneKeyDetails(String volumeName, String bucketName, String keyName,
-                         long size, long creationTime, long modificationTime,
-                         List<OzoneKeyLocation> ozoneKeyLocations,
-                         ReplicationType type, Map<String, String> metadata,
-                         FileEncryptionInfo feInfo, int replicationFactor) {
-    super(volumeName, bucketName, keyName, size, creationTime,
-        modificationTime, type, replicationFactor);
-    this.ozoneKeyLocations = ozoneKeyLocations;
-    this.feInfo = feInfo;
-    this.setMetadata(metadata);
-  }
-
+  private final Long generation;
 
   /**
    * Constructs OzoneKeyDetails from OmKeyInfo.
@@ -71,12 +58,31 @@ public class OzoneKeyDetails extends OzoneKey {
       ReplicationConfig replicationConfig,
       Map<String, String> metadata,
       FileEncryptionInfo feInfo,
-      SupplierWithIOException<OzoneInputStream> contentSupplier) {
+      CheckedSupplier<OzoneInputStream, IOException> contentSupplier,
+      boolean isFile, String owner, Map<String, String> tags, Long generation) {
     super(volumeName, bucketName, keyName, size, creationTime,
-            modificationTime, replicationConfig, metadata);
+        modificationTime, replicationConfig, metadata, isFile, owner, tags);
     this.ozoneKeyLocations = ozoneKeyLocations;
     this.feInfo = feInfo;
     this.contentSupplier = contentSupplier;
+    this.generation = generation;
+  }
+
+  /**
+   * Constructs OzoneKeyDetails from OmKeyInfo.
+   */
+  @SuppressWarnings("parameternumber")
+  public OzoneKeyDetails(String volumeName, String bucketName, String keyName,
+                         long size, long creationTime, long modificationTime,
+                         List<OzoneKeyLocation> ozoneKeyLocations,
+                         ReplicationConfig replicationConfig,
+                         Map<String, String> metadata,
+                         FileEncryptionInfo feInfo,
+                         CheckedSupplier<OzoneInputStream, IOException> contentSupplier,
+                         boolean isFile, String owner, Map<String, String> tags) {
+    this(volumeName, bucketName, keyName, size, creationTime,
+        modificationTime, ozoneKeyLocations, replicationConfig, metadata, feInfo, contentSupplier,
+        isFile, owner, tags, null);
   }
 
   /**
@@ -89,12 +95,9 @@ public class OzoneKeyDetails extends OzoneKey {
   public FileEncryptionInfo getFileEncryptionInfo() {
     return feInfo;
   }
-  /**
-   * Set details of key location.
-   * @param ozoneKeyLocations - details of key location
-   */
-  public void setOzoneKeyLocations(List<OzoneKeyLocation> ozoneKeyLocations) {
-    this.ozoneKeyLocations = ozoneKeyLocations;
+
+  public Long getGeneration() {
+    return generation;
   }
 
   /**

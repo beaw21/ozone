@@ -38,10 +38,6 @@ public final class HddsConfigKeys {
       "hdds.container.report.interval";
   public static final String HDDS_CONTAINER_REPORT_INTERVAL_DEFAULT =
       "60m";
-  public static final String HDDS_CRL_STATUS_REPORT_INTERVAL =
-      "hdds.crl.status.report.interval";
-  public static final String HDDS_CRL_STATUS_REPORT_INTERVAL_DEFAULT =
-      "60s";
   public static final String HDDS_PIPELINE_REPORT_INTERVAL =
       "hdds.pipeline.report.interval";
   public static final String HDDS_PIPELINE_REPORT_INTERVAL_DEFAULT =
@@ -61,6 +57,14 @@ public final class HddsConfigKeys {
   // Configuration to allow volume choosing policy.
   public static final String HDDS_DATANODE_VOLUME_CHOOSING_POLICY =
       "hdds.datanode.volume.choosing.policy";
+
+  public static final String HDDS_DATANODE_VOLUME_MIN_FREE_SPACE =
+      "hdds.datanode.volume.min.free.space";
+  public static final String HDDS_DATANODE_VOLUME_MIN_FREE_SPACE_DEFAULT =
+      "5GB";
+
+  public static final String HDDS_DATANODE_VOLUME_MIN_FREE_SPACE_PERCENT =
+      "hdds.datanode.volume.min.free.space.percent";
 
   public static final String HDDS_DB_PROFILE = "hdds.db.profile";
 
@@ -144,6 +148,11 @@ public final class HddsConfigKeys {
       + ".name";
   public static final String HDDS_PUBLIC_KEY_FILE_NAME_DEFAULT = "public.pem";
 
+  public static final String HDDS_HTTP_SERVER_KEYSTORE_TYPE = "ssl.server.keystore.type";
+  public static final String HDDS_HTTP_SERVER_KEYSTORE_TYPE_DEFAULT = "jks";
+  public static final String HDDS_HTTP_SERVER_TRUSTSTORE_TYPE = "ssl.server.truststore.type";
+  public static final String HDDS_HTTP_SERVER_TRUSTSTORE_TYPE_DEFAULT = "jks";
+
   public static final String HDDS_BLOCK_TOKEN_EXPIRY_TIME =
       "hdds.block.token.expiry.time";
   public static final String HDDS_BLOCK_TOKEN_EXPIRY_TIME_DEFAULT = "1d";
@@ -171,9 +180,6 @@ public final class HddsConfigKeys {
   public static final String HDDS_X509_FILE_NAME = "hdds.x509.file.name";
   public static final String HDDS_X509_FILE_NAME_DEFAULT = "certificate.crt";
 
-  public static final String HDDS_X509_CRL_NAME = "hdds.x509.CRL.name";
-  public static final String HDDS_X509_CRL_NAME_DEFAULT = "scm.crl";
-
   /**
    * Default duration of certificates issued by SCM CA. The formats accepted are
    * based on the ISO-8601 duration format PnDTnHnMn.nS Default value is 5 years
@@ -193,8 +199,39 @@ public final class HddsConfigKeys {
       "hdds.x509.renew.grace.duration";
 
   public static final String HDDS_X509_RENEW_GRACE_DURATION_DEFAULT = "P28D";
+  public static final String HDDS_X509_GRACE_DURATION_TOKEN_CHECKS_ENABLED =
+      "hdds.x509.grace.duration.token.checks.enabled";
+  public static final boolean
+      HDDS_X509_GRACE_DURATION_TOKEN_CHECKS_ENABLED_DEFAULT = true;
   public static final String HDDS_NEW_KEY_CERT_DIR_NAME_SUFFIX = "-next";
   public static final String HDDS_BACKUP_KEY_CERT_DIR_NAME_SUFFIX = "-previous";
+  public static final String HDDS_NEW_KEY_CERT_DIR_NAME_PROGRESS_SUFFIX =
+      "-progress";
+  public static final String HDDS_X509_CA_ROTATION_CHECK_INTERNAL =
+      "hdds.x509.ca.rotation.check.interval";
+  public static final String HDDS_X509_CA_ROTATION_CHECK_INTERNAL_DEFAULT =
+      "P1D";
+  public static final String HDDS_X509_CA_ROTATION_TIME_OF_DAY =
+      "hdds.x509.ca.rotation.time-of-day";
+  // format hh:mm:ss, representing hour, minute, and second
+  public static final String HDDS_X509_CA_ROTATION_TIME_OF_DAY_DEFAULT =
+      "02:00:00";
+  public static final String HDDS_X509_CA_ROTATION_ACK_TIMEOUT =
+      "hdds.x509.ca.rotation.ack.timeout";
+  public static final String HDDS_X509_CA_ROTATION_ACK_TIMEOUT_DEFAULT =
+      "PT15M";
+  public static final String HDDS_X509_ROOTCA_CERTIFICATE_POLLING_INTERVAL =
+      "hdds.x509.rootca.certificate.polling.interval";
+  public static final String
+      HDDS_X509_ROOTCA_CERTIFICATE_POLLING_INTERVAL_DEFAULT = "PT2h";
+  public static final String HDDS_X509_CA_ROTATION_ENABLED =
+      "hdds.x509.ca.rotation.enabled";
+  public static final boolean HDDS_X509_CA_ROTATION_ENABLED_DEFAULT = false;
+
+  public static final String HDDS_X509_EXPIRED_CERTIFICATE_CHECK_INTERVAL =
+      "hdds.x509.expired.certificate.check.interval";
+  public static final String
+      HDDS_X509_EXPIRED_CERTIFICATE_CHECK_INTERVAL_DEFAULT = "P1D";
 
   public static final String HDDS_CONTAINER_REPLICATION_COMPRESSION =
       "hdds.container.replication.compression";
@@ -215,6 +252,28 @@ public final class HddsConfigKeys {
 
   public static final String HDDS_X509_ROOTCA_PRIVATE_KEY_FILE_DEFAULT =
       "";
+
+  public static final String HDDS_SECRET_KEY_FILE =
+      "hdds.secret.key.file.name";
+  public static final String HDDS_SECRET_KEY_FILE_DEFAULT = "secret_keys.json";
+
+  public static final String HDDS_SECRET_KEY_EXPIRY_DURATION =
+      "hdds.secret.key.expiry.duration";
+  public static final String HDDS_SECRET_KEY_EXPIRY_DURATION_DEFAULT = "7d";
+
+  public static final String HDDS_SECRET_KEY_ROTATE_DURATION =
+      "hdds.secret.key.rotate.duration";
+  public static final String HDDS_SECRET_KEY_ROTATE_DURATION_DEFAULT = "1d";
+
+  public static final String HDDS_SECRET_KEY_ALGORITHM =
+      "hdds.secret.key.algorithm";
+  public static final String HDDS_SECRET_KEY_ALGORITHM_DEFAULT =
+      "HmacSHA256";
+
+  public static final String HDDS_SECRET_KEY_ROTATE_CHECK_DURATION =
+      "hdds.secret.key.rotate.check.duration";
+  public static final String HDDS_SECRET_KEY_ROTATE_CHECK_DURATION_DEFAULT
+      = "10m";
 
   /**
    * Do not instantiate.
@@ -265,6 +324,21 @@ public final class HddsConfigKeys {
   public static final String HDDS_SECURITY_CLIENT_SCM_CERTIFICATE_PROTOCOL_ACL =
       "hdds.security.client.scm.certificate.protocol.acl";
 
+  public static final String
+      HDDS_SECURITY_CLIENT_SCM_SECRET_KEY_OM_PROTOCOL_ACL =
+      "hdds.security.client.scm.secretkey.om.protocol.acl";
+
+  public static final String
+      HDDS_SECURITY_CLIENT_SCM_SECRET_KEY_SCM_PROTOCOL_ACL =
+      "hdds.security.client.scm.secretkey.scm.protocol.acl";
+
+  public static final String
+      HDDS_SECURITY_CLIENT_SCM_SECRET_KEY_DATANODE_PROTOCOL_ACL =
+      "hdds.security.client.scm.secretkey.datanode.protocol.acl";
+
+  public static final String OZONE_SECURITY_RECONFIGURE_PROTOCOL_ACL =
+      "ozone.security.reconfigure.protocol.acl";
+
   // Determines if the Container Chunk Manager will write user data to disk
   // Set to false only for specific performance tests
   public static final String HDDS_CONTAINER_PERSISTDATA =
@@ -281,7 +355,21 @@ public final class HddsConfigKeys {
       "hdds.datanode.http-address";
   public static final String HDDS_DATANODE_HTTPS_ADDRESS_KEY =
       "hdds.datanode.https-address";
-
+  public static final String HDDS_DATANODE_CLIENT_ADDRESS_KEY =
+      "hdds.datanode.client.address";
+  public static final String HDDS_DATANODE_CLIENT_BIND_HOST_KEY =
+      "hdds.datanode.client.bind.host";
+  public static final String HDDS_DATANODE_CLIENT_BIND_HOST_DEFAULT =
+      "0.0.0.0";
+  public static final String HDDS_DATANODE_CLIENT_PORT_KEY =
+      "hdds.datanode.client.port";
+  public static final int HDDS_DATANODE_CLIENT_PORT_DEFAULT = 19864;
+  public static final String HDDS_DATANODE_HANDLER_COUNT_KEY =
+      "hdds.datanode.handler.count";
+  public static final int HDDS_DATANODE_HANDLER_COUNT_DEFAULT = 10;
+  public static final String HDDS_DATANODE_READ_THREADPOOL_KEY =
+      "hdds.datanode.read.threadpool";
+  public static final int HDDS_DATANODE_READ_THREADPOOL_DEFAULT = 10;
   public static final String HDDS_DATANODE_HTTP_BIND_HOST_DEFAULT = "0.0.0.0";
   public static final int HDDS_DATANODE_HTTP_BIND_PORT_DEFAULT = 9882;
   public static final int HDDS_DATANODE_HTTPS_BIND_PORT_DEFAULT = 9883;
@@ -308,4 +396,9 @@ public final class HddsConfigKeys {
 
   public static final String OZONE_AUDIT_LOG_DEBUG_CMD_LIST_DNAUDIT =
       "ozone.audit.log.debug.cmd.list.dnaudit";
+
+  public static final String HDDS_DATANODE_SLOW_OP_WARNING_THRESHOLD_KEY =
+      "hdds.datanode.slow.op.warning.threshold";
+  public static final String HDDS_DATANODE_SLOW_OP_WARNING_THRESHOLD_DEFAULT =
+      "500ms";
 }

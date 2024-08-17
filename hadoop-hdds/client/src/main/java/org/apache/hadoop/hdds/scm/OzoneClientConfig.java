@@ -17,6 +17,7 @@
  */
 package org.apache.hadoop.hdds.scm;
 
+import com.google.common.annotations.VisibleForTesting;
 import org.apache.hadoop.hdds.conf.Config;
 import org.apache.hadoop.hdds.conf.ConfigGroup;
 import org.apache.hadoop.hdds.conf.ConfigTag;
@@ -143,22 +144,39 @@ public class OzoneClientConfig {
       tags = ConfigTag.CLIENT)
   private int retryInterval = 0;
 
+  @Config(key = "read.max.retries",
+      defaultValue = "3",
+      description = "Maximum number of retries by Ozone Client on "
+          + "encountering connectivity exception when reading a key.",
+      tags = ConfigTag.CLIENT)
+  private int maxReadRetryCount = 3;
+
+  @Config(key = "read.retry.interval",
+      defaultValue = "1",
+      description =
+          "Indicates the time duration in seconds a client will wait "
+              + "before retrying a read key request on encountering "
+              + "a connectivity excepetion from Datanodes . "
+              + "By default the interval is 1 second",
+      tags = ConfigTag.CLIENT)
+  private int readRetryInterval = 1;
+
   @Config(key = "checksum.type",
       defaultValue = "CRC32",
       description = "The checksum type [NONE/ CRC32/ CRC32C/ SHA256/ MD5] "
           + "determines which algorithm would be used to compute checksum for "
           + "chunk data. Default checksum type is CRC32.",
-      tags = ConfigTag.CLIENT)
+      tags = { ConfigTag.CLIENT, ConfigTag.CRYPTO_COMPLIANCE })
   private String checksumType = ChecksumType.CRC32.name();
 
   @Config(key = "bytes.per.checksum",
-      defaultValue = "1MB",
+      defaultValue = "16KB",
       type = ConfigType.SIZE,
       description = "Checksum will be computed for every bytes per checksum "
           + "number of bytes and stored sequentially. The minimum value for "
-          + "this config is 16KB.",
-      tags = ConfigTag.CLIENT)
-  private int bytesPerChecksum = 1024 * 1024;
+          + "this config is 8KB.",
+      tags = { ConfigTag.CLIENT, ConfigTag.CRYPTO_COMPLIANCE })
+  private int bytesPerChecksum = 16 * 1024;
 
   @Config(key = "verify.checksum",
       defaultValue = "true",
@@ -184,7 +202,7 @@ public class OzoneClientConfig {
   @Config(key = "exclude.nodes.expiry.time",
       defaultValue = "600000",
       description = "Time after which an excluded node is reconsidered for" +
-          " writes in EC. If the value is zero, the node is excluded for the" +
+          " writes. If the value is zero, the node is excluded for the" +
           " life of the client",
       tags = ConfigTag.CLIENT)
   private long excludeNodesExpiryTime = 10 * 60 * 1000;
@@ -199,6 +217,13 @@ public class OzoneClientConfig {
   // so 1 core thread for each chunk and
   // 3 concurrent stripe read should be enough.
   private int ecReconstructStripeReadPoolLimit = 10 * 3;
+
+  @Config(key = "ec.reconstruct.stripe.write.pool.limit",
+      defaultValue = "30",
+      description = "Thread pool max size for parallelly write" +
+          " available ec chunks to reconstruct the whole stripe.",
+      tags = ConfigTag.CLIENT)
+  private int ecReconstructStripeWritePoolLimit = 10 * 3;
 
   @Config(key = "checksum.combine.mode",
       defaultValue = "COMPOSITE_CRC",
@@ -222,8 +247,33 @@ public class OzoneClientConfig {
       tags = ConfigTag.CLIENT)
   private String fsDefaultBucketLayout = "FILE_SYSTEM_OPTIMIZED";
 
+  @Config(key = "incremental.chunk.list",
+      defaultValue = "false",
+      type = ConfigType.BOOLEAN,
+      description = "Client PutBlock request can choose incremental chunk " +
+          "list rather than full chunk list to optimize performance. " +
+          "Critical to HBase.",
+      tags = ConfigTag.CLIENT)
+  private boolean incrementalChunkList = true;
+
+  @Config(key = "stream.putblock.piggybacking",
+          defaultValue = "false",
+          type = ConfigType.BOOLEAN,
+          description = "Allow PutBlock to be piggybacked in WriteChunk " +
+                  "requests if the chunk is small.",
+          tags = ConfigTag.CLIENT)
+  private boolean enablePutblockPiggybacking = false;
+
+  @Config(key = "key.write.concurrency",
+      defaultValue = "1",
+      description = "Maximum concurrent writes allowed on each key. " +
+          "Defaults to 1 which matches the behavior before HDDS-9844. " +
+          "For unlimited write concurrency, set this to -1 or any negative integer value.",
+      tags = ConfigTag.CLIENT)
+  private int maxConcurrentWritePerKey = 1;
+
   @PostConstruct
-  private void validate() {
+  public void validate() {
     Preconditions.checkState(streamBufferSize > 0);
     Preconditions.checkState(streamBufferFlushSize > 0);
     Preconditions.checkState(streamBufferMaxSize > 0);
@@ -254,6 +304,7 @@ public class OzoneClientConfig {
     return streamBufferFlushSize;
   }
 
+  @VisibleForTesting
   public void setStreamBufferFlushSize(long streamBufferFlushSize) {
     this.streamBufferFlushSize = streamBufferFlushSize;
   }
@@ -262,6 +313,7 @@ public class OzoneClientConfig {
     return streamBufferSize;
   }
 
+  @VisibleForTesting
   public void setStreamBufferSize(int streamBufferSize) {
     this.streamBufferSize = streamBufferSize;
   }
@@ -270,6 +322,7 @@ public class OzoneClientConfig {
     return streamBufferFlushDelay;
   }
 
+  @VisibleForTesting
   public void setStreamBufferFlushDelay(boolean streamBufferFlushDelay) {
     this.streamBufferFlushDelay = streamBufferFlushDelay;
   }
@@ -278,6 +331,7 @@ public class OzoneClientConfig {
     return streamBufferMaxSize;
   }
 
+  @VisibleForTesting
   public void setStreamBufferMaxSize(long streamBufferMaxSize) {
     this.streamBufferMaxSize = streamBufferMaxSize;
   }
@@ -312,6 +366,22 @@ public class OzoneClientConfig {
 
   public void setRetryInterval(int retryInterval) {
     this.retryInterval = retryInterval;
+  }
+
+  public int getMaxReadRetryCount() {
+    return maxReadRetryCount;
+  }
+
+  public void setMaxReadRetryCount(int maxReadRetryCount) {
+    this.maxReadRetryCount = maxReadRetryCount;
+  }
+
+  public int getReadRetryInterval() {
+    return readRetryInterval;
+  }
+
+  public void setReadRetryInterval(int readRetryInterval) {
+    this.readRetryInterval = readRetryInterval;
   }
 
   public ChecksumType getChecksumType() {
@@ -382,6 +452,14 @@ public class OzoneClientConfig {
     return ecReconstructStripeReadPoolLimit;
   }
 
+  public void setEcReconstructStripeWritePoolLimit(int poolLimit) {
+    this.ecReconstructStripeWritePoolLimit = poolLimit;
+  }
+
+  public int getEcReconstructStripeWritePoolLimit() {
+    return ecReconstructStripeWritePoolLimit;
+  }
+
   public void setFsDefaultBucketLayout(String bucketLayout) {
     if (!bucketLayout.isEmpty()) {
       this.fsDefaultBucketLayout = bucketLayout;
@@ -392,11 +470,35 @@ public class OzoneClientConfig {
     return fsDefaultBucketLayout;
   }
 
+  public void setEnablePutblockPiggybacking(boolean enablePutblockPiggybacking) {
+    this.enablePutblockPiggybacking = enablePutblockPiggybacking;
+  }
+
+  public boolean getEnablePutblockPiggybacking() {
+    return enablePutblockPiggybacking;
+  }
+
   public boolean isDatastreamPipelineMode() {
     return datastreamPipelineMode;
   }
 
   public void setDatastreamPipelineMode(boolean datastreamPipelineMode) {
     this.datastreamPipelineMode = datastreamPipelineMode;
+  }
+
+  public void setIncrementalChunkList(boolean enable) {
+    this.incrementalChunkList = enable;
+  }
+
+  public boolean getIncrementalChunkList() {
+    return this.incrementalChunkList;
+  }
+
+  public void setMaxConcurrentWritePerKey(int maxConcurrentWritePerKey) {
+    this.maxConcurrentWritePerKey = maxConcurrentWritePerKey;
+  }
+
+  public int getMaxConcurrentWritePerKey() {
+    return this.maxConcurrentWritePerKey;
   }
 }

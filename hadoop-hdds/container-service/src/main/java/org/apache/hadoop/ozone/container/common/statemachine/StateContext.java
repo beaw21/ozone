@@ -45,7 +45,6 @@ import java.util.stream.Collectors;
 import com.google.common.annotations.VisibleForTesting;
 import com.google.protobuf.Descriptors.Descriptor;
 import org.apache.hadoop.hdds.conf.ConfigurationSource;
-import org.apache.hadoop.hdds.protocol.proto.StorageContainerDatanodeProtocolProtos.CRLStatusReport;
 import org.apache.hadoop.hdds.protocol.proto.StorageContainerDatanodeProtocolProtos.CommandStatus.Status;
 import org.apache.hadoop.hdds.protocol.proto.StorageContainerDatanodeProtocolProtos.CommandStatusReportsProto;
 import org.apache.hadoop.hdds.protocol.proto.StorageContainerDatanodeProtocolProtos.ContainerAction;
@@ -95,9 +94,6 @@ public class StateContext {
   @VisibleForTesting
   static final String INCREMENTAL_CONTAINER_REPORT_PROTO_NAME =
       IncrementalContainerReportProto.getDescriptor().getFullName();
-  @VisibleForTesting
-  static final String CRL_STATUS_REPORT_PROTO_NAME =
-      CRLStatusReport.getDescriptor().getFullName();
 
   static final Logger LOG =
       LoggerFactory.getLogger(StateContext.class);
@@ -112,7 +108,6 @@ public class StateContext {
   private final AtomicReference<Message> containerReports;
   private final AtomicReference<Message> nodeReport;
   private final AtomicReference<Message> pipelineReports;
-  private final AtomicReference<Message> crlStatusReport;
   // Incremental reports are queued in the map below
   private final Map<InetSocketAddress, List<Message>>
       incrementalReportsQueue;
@@ -152,8 +147,13 @@ public class StateContext {
   private final AtomicLong heartbeatFrequency = new AtomicLong(2000);
 
   private final AtomicLong reconHeartbeatFrequency = new AtomicLong(2000);
-  
+
   private final int maxCommandQueueLimit;
+
+  private final String threadNamePrefix;
+
+  private RunningDatanodeState runningDatanodeState;
+
   /**
    * Constructs a StateContext.
    *
@@ -163,7 +163,7 @@ public class StateContext {
    */
   public StateContext(ConfigurationSource conf,
       DatanodeStateMachine.DatanodeStates
-          state, DatanodeStateMachine parent) {
+          state, DatanodeStateMachine parent, String threadNamePrefix) {
     this.conf = conf;
     DatanodeConfiguration dnConf =
         conf.getObject(DatanodeConfiguration.class);
@@ -176,7 +176,6 @@ public class StateContext {
     containerReports = new AtomicReference<>();
     nodeReport = new AtomicReference<>();
     pipelineReports = new AtomicReference<>();
-    crlStatusReport = new AtomicReference<>(); // Certificate Revocation List
     endpoints = new HashSet<>();
     containerActions = new HashMap<>();
     pipelineActions = new HashMap<>();
@@ -187,6 +186,7 @@ public class StateContext {
     isFullReportReadyToBeSent = new HashMap<>();
     fullReportTypeList = new ArrayList<>();
     type2Reports = new HashMap<>();
+    this.threadNamePrefix = threadNamePrefix;
     initReportTypeCollection();
   }
 
@@ -200,8 +200,6 @@ public class StateContext {
     type2Reports.put(NODE_REPORT_PROTO_NAME, nodeReport);
     fullReportTypeList.add(PIPELINE_REPORTS_PROTO_NAME);
     type2Reports.put(PIPELINE_REPORTS_PROTO_NAME, pipelineReports);
-    fullReportTypeList.add(CRL_STATUS_REPORT_PROTO_NAME);
-    type2Reports.put(CRL_STATUS_REPORT_PROTO_NAME, crlStatusReport);
   }
 
   /**
@@ -511,8 +509,6 @@ public class StateContext {
         int size = actions.size();
         int limit = size > maxLimit ? maxLimit : size;
         for (int count = 0; count < limit; count++) {
-          // we need to remove the action from the containerAction queue
-          // as well
           ContainerAction action = actions.poll();
           Preconditions.checkNotNull(action);
           containerActionList.add(action);
@@ -576,6 +572,7 @@ public class StateContext {
       InetSocketAddress endpoint,
       int maxLimit) {
     List<PipelineAction> pipelineActionList = new ArrayList<>();
+    List<PipelineAction> persistPipelineAction = new ArrayList<>();
     synchronized (pipelineActions) {
       if (!pipelineActions.isEmpty() &&
           CollectionUtils.isNotEmpty(pipelineActions.get(endpoint))) {
@@ -584,8 +581,21 @@ public class StateContext {
         int size = actionsForEndpoint.size();
         int limit = size > maxLimit ? maxLimit : size;
         for (int count = 0; count < limit; count++) {
-          pipelineActionList.add(actionsForEndpoint.poll());
+          // Add closePipeline back to the pipelineAction queue until
+          // pipeline is closed and removed from the DN.
+          PipelineAction action = actionsForEndpoint.poll();
+          if (action.hasClosePipeline()) {
+            if (parentDatanodeStateMachine.getContainer().getPipelineReport()
+                .getPipelineReportList().stream().noneMatch(
+                    report -> action.getClosePipeline().getPipelineID()
+                        .equals(report.getPipelineID()))) {
+              continue;
+            }
+            persistPipelineAction.add(action);
+          }
+          pipelineActionList.add(action);
         }
+        actionsForEndpoint.addAll(persistPipelineAction);
       }
       return pipelineActionList;
     }
@@ -604,9 +614,11 @@ public class StateContext {
           parentDatanodeStateMachine.getConnectionManager(),
           this);
     case RUNNING:
-      return new RunningDatanodeState(this.conf,
-          parentDatanodeStateMachine.getConnectionManager(),
-          this);
+      if (runningDatanodeState == null) {
+        runningDatanodeState = new RunningDatanodeState(this.conf,
+            parentDatanodeStateMachine.getConnectionManager(), this);
+      }
+      return runningDatanodeState;
     case SHUTDOWN:
       return null;
     default:
@@ -646,7 +658,11 @@ public class StateContext {
     // Adding not null check, in a case where datanode is still starting up, but
     // we called stop DatanodeStateMachine, this sets state to SHUTDOWN, and
     // there is a chance of getting task as null.
-    if (task != null) {
+    if (task == null) {
+      return;
+    }
+
+    try {
       if (this.isEntering()) {
         task.onEnter();
       }
@@ -683,6 +699,8 @@ public class StateContext {
         // that we can terminate the datanode.
         setShutdownOnError();
       }
+    } finally {
+      task.clear();
     }
   }
 
@@ -877,18 +895,21 @@ public class StateContext {
   }
 
   /**
-   * Updates status of a pending status command.
+   * Updates the command status of a pending command.
    * @param cmdId       command id
    * @param cmdStatusUpdater Consumer to update command status.
-   * @return true if command status updated successfully else false.
+   * @return true if command status updated successfully else if the command
+   * associated with the command id does not exist in the context.
    */
   public boolean updateCommandStatus(Long cmdId,
       Consumer<CommandStatus> cmdStatusUpdater) {
-    if (cmdStatusMap.containsKey(cmdId)) {
-      cmdStatusUpdater.accept(cmdStatusMap.get(cmdId));
-      return true;
-    }
-    return false;
+    CommandStatus updatedCommandStatus = cmdStatusMap.computeIfPresent(cmdId,
+        (key, value) -> {
+          cmdStatusUpdater.accept(value);
+          return value;
+        }
+    );
+    return updatedCommandStatus != null;
   }
 
   public void configureHeartbeatFrequency() {
@@ -934,11 +955,6 @@ public class StateContext {
     return pipelineReports.get();
   }
 
-  @VisibleForTesting
-  public Message getCRLStatusReport() {
-    return crlStatusReport.get();
-  }
-
   public void configureReconHeartbeatFrequency() {
     reconHeartbeatFrequency.set(getReconHeartbeatInterval(conf));
   }
@@ -967,5 +983,9 @@ public class StateContext {
 
   public DatanodeQueueMetrics getQueueMetrics() {
     return parentDatanodeStateMachine.getQueueMetrics();
+  }
+
+  public String getThreadNamePrefix() {
+    return threadNamePrefix;
   }
 }

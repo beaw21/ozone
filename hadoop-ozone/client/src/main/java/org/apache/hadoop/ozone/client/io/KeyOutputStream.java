@@ -23,7 +23,10 @@ import java.io.OutputStream;
 import java.util.Collection;
 import java.util.List;
 import java.util.Map;
+import java.util.UUID;
+import java.util.concurrent.ExecutorService;
 import java.util.function.Function;
+import java.util.function.Supplier;
 import java.util.stream.Collectors;
 
 import org.apache.hadoop.fs.FSExceptionMessages;
@@ -33,6 +36,7 @@ import org.apache.hadoop.hdds.protocol.DatanodeDetails;
 import org.apache.hadoop.hdds.protocol.proto.HddsProtos.ReplicationType;
 import org.apache.hadoop.hdds.scm.ContainerClientMetrics;
 import org.apache.hadoop.hdds.scm.OzoneClientConfig;
+import org.apache.hadoop.hdds.scm.StreamBufferArgs;
 import org.apache.hadoop.hdds.scm.XceiverClientFactory;
 import org.apache.hadoop.hdds.scm.client.HddsClientUtils;
 import org.apache.hadoop.hdds.scm.container.ContainerID;
@@ -42,11 +46,13 @@ import org.apache.hadoop.hdds.scm.pipeline.Pipeline;
 import org.apache.hadoop.hdds.scm.pipeline.PipelineID;
 import org.apache.hadoop.io.retry.RetryPolicies;
 import org.apache.hadoop.io.retry.RetryPolicy;
+import org.apache.hadoop.ozone.OzoneManagerVersion;
 import org.apache.hadoop.ozone.om.helpers.OmKeyLocationInfo;
 import org.apache.hadoop.ozone.om.helpers.OmKeyLocationInfoGroup;
 import org.apache.hadoop.ozone.om.helpers.OmMultipartCommitUploadPartInfo;
 import org.apache.hadoop.ozone.om.helpers.OpenKeySession;
 import org.apache.hadoop.ozone.om.protocol.OzoneManagerProtocol;
+import org.apache.hadoop.ozone.util.MetricUtil;
 
 import com.google.common.annotations.VisibleForTesting;
 import com.google.common.base.Preconditions;
@@ -64,9 +70,9 @@ import org.slf4j.LoggerFactory;
  *
  * TODO : currently not support multi-thread access.
  */
-public class KeyOutputStream extends OutputStream implements Syncable {
+public class KeyOutputStream extends OutputStream
+    implements Syncable, KeyMetadataAware {
 
-  private OzoneClientConfig config;
   private final ReplicationConfig replication;
 
   /**
@@ -85,18 +91,33 @@ public class KeyOutputStream extends OutputStream implements Syncable {
   // how much of data is actually written yet to underlying stream
   private long offset;
   // how much data has been ingested into the stream
-  private long writeOffset;
+  private volatile long writeOffset;
   // whether an exception is encountered while write and whole write could
   // not succeed
   private boolean isException;
   private final BlockOutputStreamEntryPool blockOutputStreamEntryPool;
 
   private long clientID;
+  private StreamBufferArgs streamBufferArgs;
 
-  private OzoneManagerProtocol omClient;
+  /**
+   * Indicates if an atomic write is required. When set to true,
+   * the amount of data written must match the declared size during the commit.
+   * A mismatch will prevent the commit from succeeding.
+   * This is essential for operations like S3 put to ensure atomicity.
+   */
+  private boolean atomicKeyCreation;
+  private ContainerClientMetrics clientMetrics;
+  private OzoneManagerVersion ozoneManagerVersion;
 
-  public KeyOutputStream(ReplicationConfig replicationConfig,
-      ContainerClientMetrics clientMetrics) {
+  private final int maxConcurrentWritePerKey;
+  private final KeyOutputStreamSemaphore keyOutputStreamSemaphore;
+
+  KeyOutputStreamSemaphore getRequestSemaphore() {
+    return keyOutputStreamSemaphore;
+  }
+
+  public KeyOutputStream(ReplicationConfig replicationConfig, BlockOutputStreamEntryPool blockOutputStreamEntryPool) {
     this.replication = replicationConfig;
     closed = false;
     this.retryPolicyMap = HddsClientUtils.getExceptionList()
@@ -105,17 +126,20 @@ public class KeyOutputStream extends OutputStream implements Syncable {
             e -> RetryPolicies.TRY_ONCE_THEN_FAIL));
     retryCount = 0;
     offset = 0;
-    blockOutputStreamEntryPool = new BlockOutputStreamEntryPool(clientMetrics);
+    this.blockOutputStreamEntryPool = blockOutputStreamEntryPool;
+    // Force write concurrency to 1 per key when using this constructor.
+    // At the moment, this constructor is only used by ECKeyOutputStream.
+    this.maxConcurrentWritePerKey = 1;
+    this.keyOutputStreamSemaphore = new KeyOutputStreamSemaphore(maxConcurrentWritePerKey);
+  }
+
+  protected BlockOutputStreamEntryPool getBlockOutputStreamEntryPool() {
+    return blockOutputStreamEntryPool;
   }
 
   @VisibleForTesting
   public List<BlockOutputStreamEntry> getStreamEntries() {
     return blockOutputStreamEntryPool.getStreamEntries();
-  }
-
-  @VisibleForTesting
-  public XceiverClientFactory getXceiverClientFactory() {
-    return blockOutputStreamEntryPool.getXceiverClientFactory();
   }
 
   @VisibleForTesting
@@ -133,37 +157,22 @@ public class KeyOutputStream extends OutputStream implements Syncable {
     return clientID;
   }
 
-  @SuppressWarnings({"parameternumber", "squid:S00107"})
-  public KeyOutputStream(
-      OzoneClientConfig config,
-      OpenKeySession handler,
-      XceiverClientFactory xceiverClientManager,
-      OzoneManagerProtocol omClient, int chunkSize,
-      String requestId, ReplicationConfig replicationConfig,
-      String uploadID, int partNumber, boolean isMultipart,
-      boolean unsafeByteBufferConversion,
-      ContainerClientMetrics clientMetrics
-  ) {
-    this.config = config;
-    this.replication = replicationConfig;
-    blockOutputStreamEntryPool =
-        new BlockOutputStreamEntryPool(
-            config,
-            omClient,
-            requestId, replicationConfig,
-            uploadID, partNumber,
-            isMultipart, handler.getKeyInfo(),
-            unsafeByteBufferConversion,
-            xceiverClientManager,
-            handler.getId(),
-            clientMetrics);
+  public KeyOutputStream(Builder b) {
+    this.replication = b.replicationConfig;
+    this.blockOutputStreamEntryPool = new BlockOutputStreamEntryPool(b);
+    final OzoneClientConfig config = b.getClientConfig();
+    this.maxConcurrentWritePerKey = config.getMaxConcurrentWritePerKey();
+    this.keyOutputStreamSemaphore = new KeyOutputStreamSemaphore(maxConcurrentWritePerKey);
     this.retryPolicyMap = HddsClientUtils.getRetryPolicyByException(
         config.getMaxRetryCount(), config.getRetryInterval());
     this.retryCount = 0;
     this.isException = false;
     this.writeOffset = 0;
-    this.clientID = handler.getId();
-    this.omClient = omClient;
+    this.clientID = b.getOpenHandler().getId();
+    this.atomicKeyCreation = b.getAtomicKeyCreation();
+    this.streamBufferArgs = b.getStreamBufferArgs();
+    this.clientMetrics = b.getClientMetrics();
+    this.ozoneManagerVersion = b.ozoneManagerVersion;
   }
 
   /**
@@ -177,15 +186,13 @@ public class KeyOutputStream extends OutputStream implements Syncable {
    *
    * @param version the set of blocks that are pre-allocated.
    * @param openVersion the version corresponding to the pre-allocation.
-   * @throws IOException
    */
-  public synchronized void addPreallocateBlocks(OmKeyLocationInfoGroup version,
-      long openVersion) throws IOException {
+  public synchronized void addPreallocateBlocks(OmKeyLocationInfoGroup version, long openVersion) {
     blockOutputStreamEntryPool.addPreallocateBlocks(version, openVersion);
   }
 
   @Override
-  public synchronized void write(int b) throws IOException {
+  public void write(int b) throws IOException {
     byte[] buf = new byte[1];
     buf[0] = (byte) b;
     write(buf, 0, 1);
@@ -204,24 +211,33 @@ public class KeyOutputStream extends OutputStream implements Syncable {
    * @throws IOException
    */
   @Override
-  public synchronized void write(byte[] b, int off, int len)
+  public void write(byte[] b, int off, int len)
       throws IOException {
-    checkNotClosed();
-    if (b == null) {
-      throw new NullPointerException();
+    try {
+      getRequestSemaphore().acquire();
+      checkNotClosed();
+      if (b == null) {
+        throw new NullPointerException();
+      }
+      if ((off < 0) || (off > b.length) || (len < 0) || ((off + len) > b.length)
+          || ((off + len) < 0)) {
+        throw new IndexOutOfBoundsException();
+      }
+      if (len == 0) {
+        return;
+      }
+
+      synchronized (this) {
+        handleWrite(b, off, len, false);
+        writeOffset += len;
+      }
+    } finally {
+      getRequestSemaphore().release();
     }
-    if ((off < 0) || (off > b.length) || (len < 0) || ((off + len) > b.length)
-        || ((off + len) < 0)) {
-      throw new IndexOutOfBoundsException();
-    }
-    if (len == 0) {
-      return;
-    }
-    handleWrite(b, off, len, false);
-    writeOffset += len;
   }
 
-  private void handleWrite(byte[] b, int off, long len, boolean retry)
+  @VisibleForTesting
+  void handleWrite(byte[] b, int off, long len, boolean retry)
       throws IOException {
     while (len > 0) {
       try {
@@ -270,7 +286,7 @@ public class KeyOutputStream extends OutputStream implements Syncable {
       // to or less than the max length of the buffer allocated.
       // The len specified here is the combined sum of the data length of
       // the buffers
-      Preconditions.checkState(!retry || len <= config
+      Preconditions.checkState(!retry || len <= streamBufferArgs
           .getStreamBufferMaxSize());
       int dataWritten = (int) (current.getWrittenDataLength() - currentPos);
       writeLen = retry ? (int) len : dataWritten;
@@ -294,7 +310,7 @@ public class KeyOutputStream extends OutputStream implements Syncable {
    * @param exception   actual exception that occurred
    * @throws IOException Throws IOException if Write fails
    */
-  private void handleException(BlockOutputStreamEntry streamEntry,
+  private synchronized void handleException(BlockOutputStreamEntry streamEntry,
       IOException exception) throws IOException {
     Throwable t = HddsClientUtils.checkForException(exception);
     Preconditions.checkNotNull(t);
@@ -321,7 +337,7 @@ public class KeyOutputStream extends OutputStream implements Syncable {
           pipeline, totalSuccessfulFlushedData, bufferedDataLen, retryCount);
     }
     Preconditions.checkArgument(
-        bufferedDataLen <= config.getStreamBufferMaxSize());
+        bufferedDataLen <= streamBufferArgs.getStreamBufferMaxSize());
     Preconditions.checkArgument(
         offset - blockOutputStreamEntryPool.getKeyLength() == bufferedDataLen);
     long containerId = streamEntry.getBlockID().getContainerID();
@@ -370,7 +386,7 @@ public class KeyOutputStream extends OutputStream implements Syncable {
     }
   }
 
-  private void markStreamClosed() {
+  private synchronized void markStreamClosed() {
     blockOutputStreamEntryPool.cleanup();
     closed = true;
   }
@@ -444,32 +460,53 @@ public class KeyOutputStream extends OutputStream implements Syncable {
   }
 
   @Override
-  public synchronized void flush() throws IOException {
-    checkNotClosed();
-    handleFlushOrClose(StreamAction.FLUSH);
+  public void flush() throws IOException {
+    try {
+      getRequestSemaphore().acquire();
+      checkNotClosed();
+      handleFlushOrClose(StreamAction.FLUSH);
+    } finally {
+      getRequestSemaphore().release();
+    }
   }
 
   @Override
   public void hflush() throws IOException {
+    // Note: Semaphore acquired and released inside hsync().
     hsync();
   }
 
   @Override
-  public synchronized void hsync() throws IOException {
-    if (replication.getReplicationType() != ReplicationType.RATIS) {
-      throw new UnsupportedOperationException(
-          "Replication type is not " + ReplicationType.RATIS);
+  public void hsync() throws IOException {
+    try {
+      getRequestSemaphore().acquire();
+
+      if (replication.getReplicationType() != ReplicationType.RATIS) {
+        throw new UnsupportedOperationException(
+            "Replication type is not " + ReplicationType.RATIS);
+      }
+      if (replication.getRequiredNodes() <= 1) {
+        throw new UnsupportedOperationException("The replication factor = "
+            + replication.getRequiredNodes() + " <= 1");
+      }
+      if (ozoneManagerVersion.compareTo(OzoneManagerVersion.HBASE_SUPPORT) < 0) {
+        throw new UnsupportedOperationException("Hsync API requires OM version "
+            + OzoneManagerVersion.HBASE_SUPPORT + " or later. Current OM version "
+            + ozoneManagerVersion);
+      }
+      checkNotClosed();
+      final long hsyncPos = writeOffset;
+      handleFlushOrClose(StreamAction.HSYNC);
+
+      synchronized (this) {
+        Preconditions.checkState(offset >= hsyncPos,
+            "offset = %s < hsyncPos = %s", offset, hsyncPos);
+        MetricUtil.captureLatencyNs(clientMetrics::addHsyncLatency,
+            () -> blockOutputStreamEntryPool.hsyncKey(hsyncPos));
+      }
+    } finally {
+      getRequestSemaphore().release();
     }
-    if (replication.getRequiredNodes() <= 1) {
-      throw new UnsupportedOperationException("The replication factor = "
-          + replication.getRequiredNodes() + " <= 1");
-    }
-    checkNotClosed();
-    final long hsyncPos = writeOffset;
-    handleFlushOrClose(StreamAction.HSYNC);
-    Preconditions.checkState(offset >= hsyncPos,
-        "offset = %s < hsyncPos = %s", offset, hsyncPos);
-    blockOutputStreamEntryPool.hsyncKey(hsyncPos);
   }
 
   /**
@@ -556,13 +593,19 @@ public class KeyOutputStream extends OutputStream implements Syncable {
       if (!isException) {
         Preconditions.checkArgument(writeOffset == offset);
       }
+      if (atomicKeyCreation) {
+        long expectedSize = blockOutputStreamEntryPool.getDataSize();
+        Preconditions.checkState(expectedSize == offset,
+            String.format("Expected: %d and actual %d write sizes do not match",
+                expectedSize, offset));
+      }
       blockOutputStreamEntryPool.commitKey(offset);
     } finally {
       blockOutputStreamEntryPool.cleanup();
     }
   }
 
-  public synchronized OmMultipartCommitUploadPartInfo
+  synchronized OmMultipartCommitUploadPartInfo
       getCommitUploadPartInfo() {
     return blockOutputStreamEntryPool.getCommitUploadPartInfo();
   }
@@ -572,6 +615,11 @@ public class KeyOutputStream extends OutputStream implements Syncable {
     return blockOutputStreamEntryPool.getExcludeList();
   }
 
+  @Override
+  public Map<String, String> getMetadata() {
+    return this.blockOutputStreamEntryPool.getMetadata();
+  }
+
   /**
    * Builder class of KeyOutputStream.
    */
@@ -579,8 +627,7 @@ public class KeyOutputStream extends OutputStream implements Syncable {
     private OpenKeySession openHandler;
     private XceiverClientFactory xceiverManager;
     private OzoneManagerProtocol omClient;
-    private int chunkSize;
-    private String requestID;
+    private final String requestID = UUID.randomUUID().toString();
     private String multipartUploadID;
     private int multipartNumber;
     private boolean isMultipartKey;
@@ -588,6 +635,10 @@ public class KeyOutputStream extends OutputStream implements Syncable {
     private OzoneClientConfig clientConfig;
     private ReplicationConfig replicationConfig;
     private ContainerClientMetrics clientMetrics;
+    private boolean atomicKeyCreation = false;
+    private StreamBufferArgs streamBufferArgs;
+    private Supplier<ExecutorService> executorServiceSupplier;
+    private OzoneManagerVersion ozoneManagerVersion;
 
     public String getMultipartUploadID() {
       return multipartUploadID;
@@ -634,22 +685,8 @@ public class KeyOutputStream extends OutputStream implements Syncable {
       return this;
     }
 
-    public int getChunkSize() {
-      return chunkSize;
-    }
-
-    public Builder setChunkSize(int size) {
-      this.chunkSize = size;
-      return this;
-    }
-
     public String getRequestID() {
       return requestID;
-    }
-
-    public Builder setRequestID(String id) {
-      this.requestID = id;
-      return this;
     }
 
     public boolean isMultipartKey() {
@@ -667,6 +704,15 @@ public class KeyOutputStream extends OutputStream implements Syncable {
 
     public Builder setConfig(OzoneClientConfig config) {
       this.clientConfig = config;
+      return this;
+    }
+
+    public StreamBufferArgs getStreamBufferArgs() {
+      return streamBufferArgs;
+    }
+
+    public Builder setStreamBufferArgs(StreamBufferArgs streamBufferArgs) {
+      this.streamBufferArgs = streamBufferArgs;
       return this;
     }
 
@@ -688,6 +734,11 @@ public class KeyOutputStream extends OutputStream implements Syncable {
       return this;
     }
 
+    public Builder setAtomicKeyCreation(boolean atomicKey) {
+      this.atomicKeyCreation = atomicKey;
+      return this;
+    }
+
     public Builder setClientMetrics(ContainerClientMetrics clientMetrics) {
       this.clientMetrics = clientMetrics;
       return this;
@@ -697,20 +748,30 @@ public class KeyOutputStream extends OutputStream implements Syncable {
       return clientMetrics;
     }
 
+    public boolean getAtomicKeyCreation() {
+      return atomicKeyCreation;
+    }
+
+    public Builder setExecutorServiceSupplier(Supplier<ExecutorService> executorServiceSupplier) {
+      this.executorServiceSupplier = executorServiceSupplier;
+      return this;
+    }
+
+    public Supplier<ExecutorService> getExecutorServiceSupplier() {
+      return executorServiceSupplier;
+    }
+
+    public Builder setOmVersion(OzoneManagerVersion omVersion) {
+      this.ozoneManagerVersion = omVersion;
+      return this;
+    }
+
+    public OzoneManagerVersion getOmVersion() {
+      return ozoneManagerVersion;
+    }
+
     public KeyOutputStream build() {
-      return new KeyOutputStream(
-          clientConfig,
-          openHandler,
-          xceiverManager,
-          omClient,
-          chunkSize,
-          requestID,
-          replicationConfig,
-          multipartUploadID,
-          multipartNumber,
-          isMultipartKey,
-          unsafeByteBufferConversion,
-          clientMetrics);
+      return new KeyOutputStream(this);
     }
 
   }
@@ -720,7 +781,7 @@ public class KeyOutputStream extends OutputStream implements Syncable {
    * the last state of the volatile {@link #closed} field.
    * @throws IOException if the connection is closed.
    */
-  private void checkNotClosed() throws IOException {
+  private synchronized void checkNotClosed() throws IOException {
     if (closed) {
       throw new IOException(
           ": " + FSExceptionMessages.STREAM_IS_CLOSED + " Key: "

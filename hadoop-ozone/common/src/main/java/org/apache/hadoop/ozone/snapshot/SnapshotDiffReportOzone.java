@@ -21,8 +21,12 @@ package org.apache.hadoop.ozone.snapshot;
 import org.apache.commons.lang3.StringUtils;
 import org.apache.hadoop.fs.Path;
 import org.apache.hadoop.hdds.conf.OzoneConfiguration;
+import org.apache.hadoop.hdds.utils.db.Codec;
+import org.apache.hadoop.hdds.utils.db.DelegatedCodec;
+import org.apache.hadoop.hdds.utils.db.Proto2Codec;
 import org.apache.hadoop.ozone.OFSPath;
 import org.apache.hadoop.ozone.protocol.proto.OzoneManagerProtocolProtos;
+import org.apache.hadoop.ozone.protocol.proto.OzoneManagerProtocolProtos.DiffReportEntryProto;
 import org.apache.hadoop.ozone.protocol.proto.OzoneManagerProtocolProtos.SnapshotDiffReportProto;
 
 import java.nio.charset.StandardCharsets;
@@ -33,9 +37,21 @@ import static org.apache.hadoop.ozone.OzoneConsts.OZONE_URI_DELIMITER;
 
 /**
  * Snapshot diff report.
+ * <p>
+ * This class is immutable.
  */
 public class SnapshotDiffReportOzone
     extends org.apache.hadoop.hdfs.protocol.SnapshotDiffReport {
+
+  private static final Codec<DiffReportEntry> CODEC = new DelegatedCodec<>(
+      Proto2Codec.get(DiffReportEntryProto.getDefaultInstance()),
+      SnapshotDiffReportOzone::fromProtobufDiffReportEntry,
+      SnapshotDiffReportOzone::toProtobufDiffReportEntry,
+      DelegatedCodec.CopyType.SHALLOW);
+
+  public static Codec<DiffReportEntry> getDiffReportEntryCodec() {
+    return CODEC;
+  }
 
   private static final String LINE_SEPARATOR = System.getProperty(
       "line.separator", "\n");
@@ -73,6 +89,14 @@ public class SnapshotDiffReportOzone
     return super.getDiffList();
   }
 
+  public String getVolumeName() {
+    return volumeName;
+  }
+
+  public String getBucketName() {
+    return bucketName;
+  }
+
   public String getToken() {
     return token;
   }
@@ -90,8 +114,7 @@ public class SnapshotDiffReportOzone
     }
     if (StringUtils.isNotEmpty(token)) {
       str.append("Next token: ")
-          .append(token)
-          .append(LINE_SEPARATOR);
+          .append(token);
     }
     return str.toString();
   }
@@ -189,6 +212,4 @@ public class SnapshotDiffReportOzone
   public void aggregate(SnapshotDiffReportOzone diffReport) {
     this.getDiffList().addAll(diffReport.getDiffList());
   }
-
-
 }

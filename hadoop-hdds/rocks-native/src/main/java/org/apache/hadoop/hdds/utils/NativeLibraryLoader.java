@@ -18,6 +18,9 @@
 
 package org.apache.hadoop.hdds.utils;
 
+import com.google.common.annotations.VisibleForTesting;
+import org.apache.commons.lang3.tuple.Pair;
+import org.apache.hadoop.ozone.util.ShutdownHookManager;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -26,7 +29,10 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.nio.file.Files;
 import java.nio.file.StandardCopyOption;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Optional;
 import java.util.concurrent.ConcurrentHashMap;
 
@@ -36,8 +42,11 @@ import java.util.concurrent.ConcurrentHashMap;
 public class NativeLibraryLoader {
 
   private static final Logger LOG =
-          LoggerFactory.getLogger(NativeLibraryLoader.class);
+      LoggerFactory.getLogger(NativeLibraryLoader.class);
+  public static final int LIBRARY_SHUTDOWN_HOOK_PRIORITY = 1;
   private static final String OS = System.getProperty("os.name").toLowerCase();
+
+  public static final String NATIVE_LIB_TMP_DIR = "native.lib.tmp.dir";
   private Map<String, Boolean> librariesLoaded;
   private static volatile NativeLibraryLoader instance;
 
@@ -74,7 +83,8 @@ public class NativeLibraryLoader {
     return OS.startsWith("linux");
   }
 
-  private static String getLibOsSuffix() {
+  @VisibleForTesting
+  static String getLibOsSuffix() {
     if (isMac()) {
       return ".dylib";
     } else if (isWindows()) {
@@ -91,13 +101,14 @@ public class NativeLibraryLoader {
 
   public static boolean isLibraryLoaded(final String libraryName) {
     return getInstance().librariesLoaded
-            .getOrDefault(libraryName, false);
+        .getOrDefault(libraryName, false);
   }
 
-  public synchronized boolean loadLibrary(final String libraryName) {
+  public synchronized boolean loadLibrary(final String libraryName, final List<String> dependentFiles) {
     if (isLibraryLoaded(libraryName)) {
       return true;
     }
+    LOG.info("Loading Library: {}", libraryName);
     boolean loaded = false;
     try {
       loaded = false;
@@ -108,9 +119,9 @@ public class NativeLibraryLoader {
 
       }
       if (!loaded) {
-        Optional<File> file = copyResourceFromJarToTemp(libraryName);
-        if (file.isPresent()) {
-          System.load(file.get().getAbsolutePath());
+        Pair<Optional<File>, List<File>> files = copyResourceFromJarToTemp(libraryName, dependentFiles);
+        if (files.getKey().isPresent()) {
+          System.load(files.getKey().get().getAbsolutePath());
           loaded = true;
         }
       }
@@ -121,26 +132,60 @@ public class NativeLibraryLoader {
     return isLibraryLoaded(libraryName);
   }
 
-  private Optional<File> copyResourceFromJarToTemp(final String libraryName)
-          throws IOException {
+  // Added function to make this testable.
+  @VisibleForTesting
+  static String getSystemProperty(String property) {
+    return System.getProperty(property);
+  }
+
+  // Added function to make this testable
+  @VisibleForTesting
+  static InputStream getResourceStream(String libraryFileName) throws IOException {
+    return NativeLibraryLoader.class.getClassLoader()
+        .getResourceAsStream(libraryFileName);
+  }
+
+  private Pair<Optional<File>, List<File>> copyResourceFromJarToTemp(final String libraryName,
+                                                                     final List<String> dependentFileNames)
+      throws IOException {
     final String libraryFileName = getJniLibraryFileName(libraryName);
     InputStream is = null;
     try {
-      is = getClass().getClassLoader().getResourceAsStream(libraryFileName);
+      is = getResourceStream(libraryFileName);
       if (is == null) {
-        return Optional.empty();
+        return Pair.of(Optional.empty(), null);
       }
 
+      final String nativeLibDir =
+          Objects.nonNull(getSystemProperty(NATIVE_LIB_TMP_DIR)) ?
+              getSystemProperty(NATIVE_LIB_TMP_DIR) : "";
+      final File dir = new File(nativeLibDir).getAbsoluteFile();
+
       // create a temporary file to copy the library to
-      final File temp = File.createTempFile(libraryName, getLibOsSuffix());
+      final File temp = File.createTempFile(libraryName, getLibOsSuffix(), dir);
       if (!temp.exists()) {
-        return Optional.empty();
+        return Pair.of(Optional.empty(), null);
       } else {
         temp.deleteOnExit();
       }
 
       Files.copy(is, temp.toPath(), StandardCopyOption.REPLACE_EXISTING);
-      return Optional.ofNullable(temp);
+      List<File> dependentFiles = new ArrayList<>();
+      for (String fileName : dependentFileNames) {
+        if (is != null) {
+          is.close();
+        }
+        is = getResourceStream(fileName);
+        File file = new File(dir, fileName);
+        Files.copy(is, file.toPath(), StandardCopyOption.REPLACE_EXISTING);
+        if (file.exists()) {
+          file.deleteOnExit();
+        }
+        dependentFiles.add(file);
+      }
+      ShutdownHookManager.get().addShutdownHook(temp::delete,
+          LIBRARY_SHUTDOWN_HOOK_PRIORITY);
+      return Pair.of(Optional.of(temp), dependentFiles);
     } finally {
       if (is != null) {
         is.close();

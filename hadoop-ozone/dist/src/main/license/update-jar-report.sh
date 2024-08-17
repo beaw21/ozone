@@ -18,11 +18,11 @@
 set -euo pipefail
 
 SCRIPTDIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" >/dev/null 2>&1 && pwd )"
-REPORT_NAME=${1:-jar-report.txt}
+REPORT_NAME=${1:-current.txt}
 
 cd "$SCRIPTDIR/../../.." || exit 1
 
-OZONE_VERSION=$(mvn help:evaluate -Dexpression=ozone.version -q -DforceStdout)
+OZONE_VERSION=$(mvn help:evaluate -Dexpression=ozone.version -q -DforceStdout -Dscan=false)
 DIST_DIR="$SCRIPTDIR/../../../target/ozone-$OZONE_VERSION"
 : ${OZONE_DIST_DIR:=$DIST_DIR}
 

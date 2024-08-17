@@ -32,8 +32,7 @@ import org.apache.hadoop.ozone.protocol.proto.OzoneManagerProtocolProtos
     .OMResponse;
 import org.apache.hadoop.hdds.utils.db.BatchOperation;
 
-import javax.annotation.CheckForNull;
-import javax.annotation.Nonnull;
+import jakarta.annotation.Nonnull;
 
 import static org.apache.hadoop.ozone.om.OmMetadataManagerImpl.BUCKET_TABLE;
 import static org.apache.hadoop.ozone.om.OmMetadataManagerImpl.DELETED_TABLE;
@@ -55,27 +54,23 @@ public class S3MultipartUploadCompleteResponse extends OmKeyResponse {
   private String multipartKey;
   private String multipartOpenKey;
   private OmKeyInfo omKeyInfo;
-  private List<OmKeyInfo> partsUnusedList;
+  private List<OmKeyInfo> allKeyInfoToRemove;
   private OmBucketInfo omBucketInfo;
-  private RepeatedOmKeyInfo keyVersionsToDelete;
 
-  @SuppressWarnings("checkstyle:ParameterNumber")
   public S3MultipartUploadCompleteResponse(
       @Nonnull OMResponse omResponse,
       @Nonnull String multipartKey,
       @Nonnull String multipartOpenKey,
       @Nonnull OmKeyInfo omKeyInfo,
-      @Nonnull List<OmKeyInfo> unUsedParts,
+      @Nonnull List<OmKeyInfo> allKeyInfoToRemove,
       @Nonnull BucketLayout bucketLayout,
-      @CheckForNull OmBucketInfo omBucketInfo,
-      RepeatedOmKeyInfo keyVersionsToDelete) {
+      OmBucketInfo omBucketInfo) {
     super(omResponse, bucketLayout);
-    this.partsUnusedList = unUsedParts;
+    this.allKeyInfoToRemove = allKeyInfoToRemove;
     this.multipartKey = multipartKey;
     this.multipartOpenKey = multipartOpenKey;
     this.omKeyInfo = omKeyInfo;
     this.omBucketInfo = omBucketInfo;
-    this.keyVersionsToDelete = keyVersionsToDelete;
   }
 
   /**
@@ -99,22 +94,17 @@ public class S3MultipartUploadCompleteResponse extends OmKeyResponse {
         multipartKey);
 
     // 2. Add key to KeyTable
-    String ozoneKey = addToKeyTable(omMetadataManager, batchOperation);
+    addToKeyTable(omMetadataManager, batchOperation);
 
     // 3. Delete unused parts
-    if (!partsUnusedList.isEmpty()) {
+    if (!allKeyInfoToRemove.isEmpty()) {
       // Add unused parts to deleted key table.
-      if (keyVersionsToDelete == null) {
-        keyVersionsToDelete = new RepeatedOmKeyInfo(partsUnusedList);
-      } else {
-        for (OmKeyInfo unusedParts : partsUnusedList) {
-          keyVersionsToDelete.addOmKeyInfo(unusedParts);
-        }
+      for (OmKeyInfo keyInfoToRemove : allKeyInfoToRemove) {
+        String deleteKey = omMetadataManager.getOzoneDeletePathKey(
+            keyInfoToRemove.getObjectID(), multipartKey);
+        omMetadataManager.getDeletedTable().putWithBatch(batchOperation,
+            deleteKey, new RepeatedOmKeyInfo(keyInfoToRemove));
       }
-    }
-    if (keyVersionsToDelete != null) {
-      omMetadataManager.getDeletedTable().putWithBatch(batchOperation,
-          ozoneKey, keyVersionsToDelete);
     }
 
     // update bucket usedBytes, only when total bucket size has changed
@@ -138,5 +128,13 @@ public class S3MultipartUploadCompleteResponse extends OmKeyResponse {
 
   protected OmKeyInfo getOmKeyInfo() {
     return omKeyInfo;
+  }
+
+  protected OmBucketInfo getOmBucketInfo() {
+    return omBucketInfo;
+  }
+
+  protected String getMultiPartKey() {
+    return multipartKey;
   }
 }

@@ -23,7 +23,6 @@ import java.io.IOException;
 import java.net.InetAddress;
 import java.net.NetworkInterface;
 import java.nio.file.Path;
-import java.security.cert.CertificateException;
 import java.security.cert.X509Certificate;
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -37,11 +36,13 @@ import org.apache.hadoop.hdds.annotation.InterfaceStability;
 import org.apache.hadoop.hdds.conf.ConfigurationSource;
 
 import org.apache.commons.validator.routines.InetAddressValidator;
+
 import static org.apache.hadoop.ozone.OzoneConfigKeys.OZONE_HTTP_SECURITY_ENABLED_DEFAULT;
 import static org.apache.hadoop.ozone.OzoneConfigKeys.OZONE_HTTP_SECURITY_ENABLED_KEY;
 import static org.apache.hadoop.ozone.OzoneConfigKeys.OZONE_SECURITY_ENABLED_DEFAULT;
 import static org.apache.hadoop.ozone.OzoneConfigKeys.OZONE_SECURITY_ENABLED_KEY;
 
+import org.apache.hadoop.hdds.security.SecurityConfig;
 import org.apache.hadoop.hdds.security.x509.certificate.utils.CertificateCodec;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -63,8 +64,8 @@ public final class OzoneSecurityUtil {
   }
 
   public static boolean isSecurityEnabled(ConfigurationSource conf) {
-    return conf.getBoolean(OZONE_SECURITY_ENABLED_KEY,
-        OZONE_SECURITY_ENABLED_DEFAULT);
+    SecurityConfig.initSecurityProvider(conf);
+    return conf.getBoolean(OZONE_SECURITY_ENABLED_KEY, OZONE_SECURITY_ENABLED_DEFAULT);
   }
 
   public static boolean isHttpSecurityEnabled(ConfigurationSource conf) {
@@ -136,12 +137,8 @@ public final class OzoneSecurityUtil {
     List<X509Certificate> x509Certificates =
         new ArrayList<>(pemEncodedCerts.size());
     for (String cert : pemEncodedCerts) {
-      try {
-        x509Certificates.add(CertificateCodec.getX509Certificate(cert));
-      } catch (CertificateException ex) {
-        LOG.error("Error while converting to X509 format", ex);
-        throw new IOException(ex);
-      }
+      x509Certificates.add(CertificateCodec.getX509Certificate(
+          cert, CertificateCodec::toIOException));
     }
     return x509Certificates;
   }

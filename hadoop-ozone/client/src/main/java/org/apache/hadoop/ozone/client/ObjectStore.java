@@ -24,15 +24,19 @@ import java.util.Iterator;
 import java.util.List;
 import java.util.NoSuchElementException;
 
+import org.apache.commons.lang3.StringUtils;
 import org.apache.hadoop.hdds.conf.ConfigurationSource;
 import org.apache.hadoop.crypto.key.KeyProvider;
 import org.apache.hadoop.hdds.conf.OzoneConfiguration;
 import org.apache.hadoop.hdds.scm.client.HddsClientUtils;
 import org.apache.hadoop.hdds.tracing.TracingUtil;
 import org.apache.hadoop.io.Text;
+import org.apache.hadoop.ozone.OmUtils;
 import org.apache.hadoop.ozone.OzoneAcl;
+import org.apache.hadoop.ozone.OzoneConfigKeys;
 import org.apache.hadoop.ozone.client.protocol.ClientProtocol;
 import org.apache.hadoop.ozone.om.exceptions.OMException;
+import org.apache.hadoop.ozone.om.helpers.BucketLayout;
 import org.apache.hadoop.ozone.om.helpers.DeleteTenantState;
 import org.apache.hadoop.ozone.om.helpers.OmVolumeArgs;
 import org.apache.hadoop.ozone.om.helpers.S3SecretValue;
@@ -42,6 +46,8 @@ import org.apache.hadoop.ozone.om.helpers.TenantUserInfoValue;
 import org.apache.hadoop.ozone.om.helpers.TenantUserList;
 import org.apache.hadoop.ozone.security.OzoneTokenIdentifier;
 import org.apache.hadoop.ozone.security.acl.OzoneObj;
+import org.apache.hadoop.ozone.snapshot.CancelSnapshotDiffResponse;
+import org.apache.hadoop.ozone.snapshot.ListSnapshotResponse;
 import org.apache.hadoop.ozone.snapshot.SnapshotDiffResponse;
 import org.apache.hadoop.security.UserGroupInformation;
 
@@ -73,6 +79,7 @@ public class ObjectStore {
    */
   private int listCacheSize;
   private final String defaultS3Volume;
+  private BucketLayout s3BucketLayout;
 
   /**
    * Creates an instance of ObjectStore.
@@ -84,6 +91,10 @@ public class ObjectStore {
     this.proxy = TracingUtil.createProxy(proxy, ClientProtocol.class, conf);
     this.listCacheSize = HddsClientUtils.getListCacheSize(conf);
     defaultS3Volume = HddsClientUtils.getDefaultS3VolumeName(conf);
+    s3BucketLayout = OmUtils.validateBucketLayout(
+        conf.getTrimmed(
+            OzoneConfigKeys.OZONE_S3G_DEFAULT_BUCKET_LAYOUT_KEY,
+            OzoneConfigKeys.OZONE_S3G_DEFAULT_BUCKET_LAYOUT_DEFAULT));
   }
 
   @VisibleForTesting
@@ -125,10 +136,29 @@ public class ObjectStore {
    * @param bucketName - S3 bucket Name.
    * @throws IOException - On failure, throws an exception like Bucket exists.
    */
-  public void createS3Bucket(String bucketName) throws
-      IOException {
+  public void createS3Bucket(String bucketName) throws IOException {
     OzoneVolume volume = getS3Volume();
-    volume.createBucket(bucketName);
+    // Backwards compatibility:
+    // When OM is pre-finalized for the bucket layout feature, it will block
+    // the creation of all bucket types except legacy. If OBS bucket creation
+    // fails for this reason, retry with legacy bucket layout.
+    try {
+      volume.createBucket(bucketName,
+          BucketArgs.newBuilder().setBucketLayout(s3BucketLayout).build());
+    } catch (OMException ex) {
+      if (ex.getResult() ==
+          OMException.ResultCodes.NOT_SUPPORTED_OPERATION_PRIOR_FINALIZATION) {
+        final BucketLayout fallbackLayout = BucketLayout.LEGACY;
+        LOG.info("Failed to create S3 bucket with layout {} since OM is " +
+                "pre-finalized for bucket layouts. Retrying creation with a " +
+                "{} bucket.",
+            s3BucketLayout, fallbackLayout);
+        volume.createBucket(bucketName, BucketArgs.newBuilder()
+            .setBucketLayout(fallbackLayout).build());
+      } else {
+        throw ex;
+      }
+    }
   }
 
   public OzoneBucket getS3Bucket(String bucketName) throws IOException {
@@ -538,6 +568,21 @@ public class ObjectStore {
   }
 
   /**
+   * Rename snapshot.
+   *
+   * @param volumeName vol to be used
+   * @param bucketName bucket to be used
+   * @param snapshotOldName Old name of the snapshot
+   * @param snapshotNewName New name of the snapshot
+   *
+   * @throws IOException
+   */
+  public void renameSnapshot(String volumeName,
+      String bucketName, String snapshotOldName, String snapshotNewName) throws IOException {
+    proxy.renameSnapshot(volumeName, bucketName, snapshotOldName, snapshotNewName);
+  }
+
+  /**
    * Delete snapshot.
    * @param volumeName vol to be used
    * @param bucketName bucket to be used
@@ -550,15 +595,97 @@ public class ObjectStore {
   }
 
   /**
-   * List snapshots in a volume/bucket.
+   * Returns snapshot info for volume/bucket snapshot path.
    * @param volumeName volume name
    * @param bucketName bucket name
-   * @return list of snapshots for volume/bucket snapshot path.
+   * @param snapshotName snapshot name
+   * @return snapshot info for volume/bucket snapshot path.
    * @throws IOException
    */
-  public List<OzoneSnapshot> listSnapshot(String volumeName, String bucketName)
-      throws IOException {
-    return proxy.listSnapshot(volumeName, bucketName);
+  public OzoneSnapshot getSnapshotInfo(String volumeName,
+                                       String bucketName,
+                                       String snapshotName) throws IOException {
+    return proxy.getSnapshotInfo(volumeName, bucketName, snapshotName);
+  }
+
+  /**
+   * List snapshots in a volume/bucket.
+   * @param volumeName     volume name
+   * @param bucketName     bucket name
+   * @param snapshotPrefix snapshot prefix to match
+   * @param prevSnapshot   snapshots will be listed after this snapshot name
+   * @return an iterator of snapshots for volume/bucket snapshot path.
+   * @throws IOException
+   */
+  public Iterator<OzoneSnapshot> listSnapshot(String volumeName,
+                                              String bucketName,
+                                              String snapshotPrefix,
+                                              String prevSnapshot) throws IOException {
+    return new SnapshotIterator(volumeName, bucketName, snapshotPrefix, prevSnapshot);
+  }
+
+  /**
+   * An Iterator to iterate over {@link OzoneSnapshot} list.
+   */
+  private final class SnapshotIterator implements Iterator<OzoneSnapshot> {
+
+    private final String volumeName;
+    private final String bucketName;
+    private final String snapshotPrefix;
+    private String lastSnapshot = null;
+
+    private Iterator<OzoneSnapshot> currentIterator;
+
+    SnapshotIterator(String volumeName,
+                     String bucketName,
+                     String snapshotPrefix,
+                     String prevSnapshot) throws IOException {
+      this.volumeName = volumeName;
+      this.bucketName = bucketName;
+      this.snapshotPrefix = snapshotPrefix;
+      // Initialized the currentIterator and continuationToken.
+      getNextListOfSnapshots(prevSnapshot);
+    }
+
+    @Override
+    public boolean hasNext() {
+      if (!currentIterator.hasNext() && StringUtils.isNotEmpty(lastSnapshot)) {
+        try {
+          // fetch the next page if lastSnapshot is not null.
+          getNextListOfSnapshots(lastSnapshot);
+        } catch (IOException e) {
+          LOG.error("Error retrieving next batch of list results", e);
+        }
+      }
+      return currentIterator.hasNext();
+    }
+
+    @Override
+    public OzoneSnapshot next() {
+      if (hasNext()) {
+        return currentIterator.next();
+      }
+      throw new NoSuchElementException();
+    }
+
+    private void getNextListOfSnapshots(String startSnapshot) throws IOException {
+      ListSnapshotResponse response =
+          proxy.listSnapshot(volumeName, bucketName, snapshotPrefix, startSnapshot, listCacheSize);
+      currentIterator = response.getSnapshotInfos().stream().map(OzoneSnapshot::fromSnapshotInfo).iterator();
+      lastSnapshot = response.getLastSnapshot();
+    }
+  }
+
+  /**
+   * Create an image of the current compaction log DAG in the OM.
+   * @param fileNamePrefix  file name prefix of the image file.
+   * @param graphType       type of node name to use in the graph image.
+   * @return message which tells the image name, parent dir and OM leader
+   * node information.
+   */
+  public String printCompactionLogDag(String fileNamePrefix,
+                                      String graphType) throws IOException {
+    return proxy.printCompactionLogDag(fileNamePrefix, graphType);
   }
 
   /**
@@ -570,18 +697,58 @@ public class ObjectStore {
    * @param token to get the index to return diff report from.
    * @param pageSize maximum entries returned to the report.
    * @param forceFullDiff request to force full diff, skipping DAG optimization
+   * @param disableNativeDiff request to force diff to perform diffs without
+   *                           native lib
    * @return the difference report between two snapshots
    * @throws IOException in case of any exception while generating snapshot diff
    */
+  @SuppressWarnings("parameternumber")
   public SnapshotDiffResponse snapshotDiff(String volumeName,
                                            String bucketName,
                                            String fromSnapshot,
                                            String toSnapshot,
                                            String token,
                                            int pageSize,
-                                           boolean forceFullDiff)
+                                           boolean forceFullDiff,
+                                           boolean disableNativeDiff)
       throws IOException {
     return proxy.snapshotDiff(volumeName, bucketName, fromSnapshot, toSnapshot,
-        token, pageSize, forceFullDiff);
+        token, pageSize, forceFullDiff, disableNativeDiff);
+  }
+
+  /**
+   * Cancel the snap diff jobs.
+   * @param volumeName Name of the volume to which the snapshot bucket belong
+   * @param bucketName Name of the bucket to which the snapshots belong
+   * @param fromSnapshot The name of the starting snapshot
+   * @param toSnapshot The name of the ending snapshot
+   * @return the success if cancel succeeds.
+   * @throws IOException in case of any exception while generating snapshot diff
+   */
+  public CancelSnapshotDiffResponse cancelSnapshotDiff(String volumeName,
+                                                       String bucketName,
+                                                       String fromSnapshot,
+                                                       String toSnapshot)
+      throws IOException {
+    return proxy.cancelSnapshotDiff(volumeName, bucketName, fromSnapshot,
+        toSnapshot);
+  }
+
+  /**
+   * Get a list of the SnapshotDiff jobs for a bucket based on the JobStatus.
+   * @param volumeName Name of the volume to which the snapshotted bucket belong
+   * @param bucketName Name of the bucket to which the snapshots belong
+   * @param jobStatus JobStatus to be used to filter the snapshot diff jobs
+   * @param listAll Option to specify whether to list all jobs or not
+   * @return a list of SnapshotDiffJob objects
+   * @throws IOException in case there is a failure while getting a response.
+   */
+  public List<OzoneSnapshotDiff> listSnapshotDiffJobs(String volumeName,
+                                                    String bucketName,
+                                                    String jobStatus,
+                                                    boolean listAll)
+      throws IOException {
+    return proxy.listSnapshotDiffJobs(volumeName,
+        bucketName, jobStatus, listAll);
   }
 }

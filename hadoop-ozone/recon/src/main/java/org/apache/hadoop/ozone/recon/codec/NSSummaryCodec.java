@@ -35,18 +35,28 @@ import java.util.HashSet;
 import java.util.Set;
 
 /**
- * Codec for Namespace Summary.
+ * Codec to serialize/deserialize {@link NSSummary}.
  */
-public class NSSummaryCodec implements Codec<NSSummary> {
+public final class NSSummaryCodec implements Codec<NSSummary> {
 
-  private final Codec<Integer> integerCodec = new IntegerCodec();
-  private final Codec<Short> shortCodec = new ShortCodec();
-  private final Codec<Long> longCodec = new LongCodec();
-  private final Codec<String> stringCodec = new StringCodec();
+  private static final Codec<NSSummary> INSTANCE = new NSSummaryCodec();
+
+  public static Codec<NSSummary> get() {
+    return INSTANCE;
+  }
+
+  private final Codec<Integer> integerCodec = IntegerCodec.get();
+  private final Codec<Short> shortCodec = ShortCodec.get();
+  private final Codec<Long> longCodec = LongCodec.get();
+  private final Codec<String> stringCodec = StringCodec.get();
   // 1 int fields + 41-length int array
   // + 2 dummy field to track list size/dirName length
   private static final int NUM_OF_INTS =
       3 + ReconConstants.NUM_OF_FILE_SIZE_BINS;
+
+  private NSSummaryCodec() {
+    // singleton
+  }
 
   @Override
   public byte[] toPersistedFormat(NSSummary object) throws IOException {
@@ -55,9 +65,10 @@ public class NSSummaryCodec implements Codec<NSSummary> {
     int stringLen = dirName.getBytes(StandardCharsets.UTF_8).length;
     int numOfChildDirs = childDirs.size();
     final int resSize = NUM_OF_INTS * Integer.BYTES
-        + (numOfChildDirs + 1) * Long.BYTES // 1 long field + list size
+        + (numOfChildDirs + 1) * Long.BYTES // 1 long field for parentId + list size
         + Short.BYTES // 2 dummy shorts to track length
-        + stringLen; // directory name length
+        + stringLen // directory name length
+        + Long.BYTES; // Added space for parentId serialization
 
     ByteArrayOutputStream out = new ByteArrayOutputStream(resSize);
     out.write(integerCodec.toPersistedFormat(object.getNumOfFiles()));
@@ -74,6 +85,8 @@ public class NSSummaryCodec implements Codec<NSSummary> {
     }
     out.write(integerCodec.toPersistedFormat(stringLen));
     out.write(stringCodec.toPersistedFormat(dirName));
+    out.write(longCodec.toPersistedFormat(object.getParentId()));
+
     return out.toByteArray();
   }
 
@@ -107,6 +120,15 @@ public class NSSummaryCodec implements Codec<NSSummary> {
     assert (bytesRead == strLen);
     String dirName = stringCodec.fromPersistedFormat(buffer);
     res.setDirName(dirName);
+
+    // Check if there is enough data available to read the parentId
+    if (in.available() >= Long.BYTES) {
+      long parentId = in.readLong();
+      res.setParentId(parentId);
+    } else {
+      // Set default parentId to -1 indicating it's from old format
+      res.setParentId(-1);
+    }
     return res;
   }
 
@@ -118,6 +140,7 @@ public class NSSummaryCodec implements Codec<NSSummary> {
     copy.setFileSizeBucket(object.getFileSizeBucket());
     copy.setChildDir(object.getChildDir());
     copy.setDirName(object.getDirName());
+    copy.setParentId(object.getParentId());
     return copy;
   }
 }

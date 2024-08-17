@@ -31,6 +31,8 @@ import org.apache.hadoop.metrics2.lib.MutableCounterLong;
 import org.apache.hadoop.metrics2.lib.MutableQuantiles;
 import org.apache.hadoop.metrics2.lib.MutableRate;
 
+import java.util.EnumMap;
+
 /**
  *
  * This class is for maintaining  the various Storage Container
@@ -49,45 +51,42 @@ public class ContainerMetrics {
   public static final String STORAGE_CONTAINER_METRICS =
       "StorageContainerMetrics";
   @Metric private MutableCounterLong numOps;
-  @Metric private MutableCounterLong containerDeleteFailedNonEmptyDir;
+  @Metric private MutableCounterLong containerDeleteFailedNonEmpty;
   @Metric private MutableCounterLong containerDeleteFailedBlockCountNotZero;
   @Metric private MutableCounterLong containerForceDelete;
-  @Metric private MutableCounterLong containerDeleteFailedNonEmptyBlockDB;
+  @Metric private MutableCounterLong numReadStateMachine;
+  @Metric private MutableCounterLong bytesReadStateMachine;
 
-  private MutableCounterLong[] numOpsArray;
-  private MutableCounterLong[] opsBytesArray;
-  private MutableRate[] opsLatency;
-  private MutableQuantiles[][] opsLatQuantiles;
+
+  private final EnumMap<ContainerProtos.Type, MutableCounterLong> numOpsArray;
+  private final EnumMap<ContainerProtos.Type, MutableCounterLong> opsBytesArray;
+  private final EnumMap<ContainerProtos.Type, MutableRate> opsLatency;
+  private final EnumMap<ContainerProtos.Type, MutableQuantiles[]> opsLatQuantiles;
   private MetricsRegistry registry = null;
 
   public ContainerMetrics(int[] intervals) {
-    int numEnumEntries = ContainerProtos.Type.values().length;
     final int len = intervals.length;
-    this.numOpsArray = new MutableCounterLong[numEnumEntries];
-    this.opsBytesArray = new MutableCounterLong[numEnumEntries];
-    this.opsLatency = new MutableRate[numEnumEntries];
-    this.opsLatQuantiles = new MutableQuantiles[numEnumEntries][len];
+    MutableQuantiles[] latQuantiles = new MutableQuantiles[len];
+    this.numOpsArray = new EnumMap<>(ContainerProtos.Type.class);
+    this.opsBytesArray = new EnumMap<>(ContainerProtos.Type.class);
+    this.opsLatency = new EnumMap<>(ContainerProtos.Type.class);
+    this.opsLatQuantiles = new EnumMap<>(ContainerProtos.Type.class);
     this.registry = new MetricsRegistry("StorageContainerMetrics");
-    for (int i = 0; i < numEnumEntries; i++) {
-      numOpsArray[i] = registry.newCounter(
-          "num" + ContainerProtos.Type.forNumber(i + 1),
-          "number of " + ContainerProtos.Type.forNumber(i + 1) + " ops",
-          (long) 0);
-      opsBytesArray[i] = registry.newCounter(
-          "bytes" + ContainerProtos.Type.forNumber(i + 1),
-          "bytes used by " + ContainerProtos.Type.forNumber(i + 1) + "op",
-          (long) 0);
-      opsLatency[i] = registry.newRate(
-          "latency" + ContainerProtos.Type.forNumber(i + 1),
-          ContainerProtos.Type.forNumber(i + 1) + " op");
+
+    for (ContainerProtos.Type type : ContainerProtos.Type.values()) {
+      numOpsArray.put(type, registry.newCounter(
+          "num" + type, "number of " + type + " ops", (long) 0));
+      opsBytesArray.put(type, registry.newCounter(
+          "bytes" + type, "bytes used by " + type + "op", (long) 0));
+      opsLatency.put(type, registry.newRate("latencyNs" + type, type + " op"));
 
       for (int j = 0; j < len; j++) {
         int interval = intervals[j];
-        String quantileName = ContainerProtos.Type.forNumber(i + 1) + "Nanos"
-            + interval + "s";
-        opsLatQuantiles[i][j] = registry.newQuantiles(quantileName,
-            "latency of Container ops", "ops", "latency", interval);
+        String quantileName = type + "Nanos" + interval + "s";
+        latQuantiles[j] = registry.newQuantiles(quantileName,
+            "latency of Container ops", "ops", "latencyNs", interval);
       }
+      opsLatQuantiles.put(type, latQuantiles);
     }
   }
 
@@ -108,42 +107,33 @@ public class ContainerMetrics {
 
   public void incContainerOpsMetrics(ContainerProtos.Type type) {
     numOps.incr();
-    numOpsArray[type.ordinal()].incr();
+    numOpsArray.get(type).incr();
   }
 
-  public long getContainerOpsMetrics(ContainerProtos.Type type) {
-    return numOpsArray[type.ordinal()].value();
-  }
-
-  public void incContainerOpsLatencies(ContainerProtos.Type type,
-                                       long latencyMillis) {
-    opsLatency[type.ordinal()].add(latencyMillis);
-    for (MutableQuantiles q: opsLatQuantiles[type.ordinal()]) {
-      q.add(latencyMillis);
+  public void incContainerOpsLatencies(ContainerProtos.Type type, long latencyNs) {
+    opsLatency.get(type).add(latencyNs);
+    for (MutableQuantiles q: opsLatQuantiles.get(type)) {
+      q.add(latencyNs);
     }
   }
 
   public void incContainerBytesStats(ContainerProtos.Type type, long bytes) {
-    opsBytesArray[type.ordinal()].incr(bytes);
-  }
-
-  public long getContainerBytesMetrics(ContainerProtos.Type type) {
-    return opsBytesArray[type.ordinal()].value();
+    opsBytesArray.get(type).incr(bytes);
   }
 
   public void incContainerDeleteFailedBlockCountNotZero() {
     containerDeleteFailedBlockCountNotZero.incr();
   }
   public void incContainerDeleteFailedNonEmpty() {
-    containerDeleteFailedNonEmptyDir.incr();
+    containerDeleteFailedNonEmpty.incr();
   }
 
   public void incContainersForceDelete() {
     containerForceDelete.incr();
   }
 
-  public long getContainerDeleteFailedNonEmptyDir() {
-    return containerDeleteFailedNonEmptyDir.value();
+  public long getContainerDeleteFailedNonEmpty() {
+    return containerDeleteFailedNonEmpty.value();
   }
 
   public long getContainerDeleteFailedBlockCountNotZero() {
@@ -154,11 +144,19 @@ public class ContainerMetrics {
     return containerForceDelete.value();
   }
 
-  public void incContainerDeleteFailedNonEmptyBlocksDB() {
-    containerDeleteFailedNonEmptyBlockDB.incr();
+  public void incNumReadStateMachine() {
+    numReadStateMachine.incr();
   }
 
-  public long getContainerDeleteFailedNonEmptyBlockDB() {
-    return containerDeleteFailedNonEmptyBlockDB.value();
+  public long getNumReadStateMachine() {
+    return numReadStateMachine.value();
+  }
+
+  public void incBytesReadStateMachine(long bytes) {
+    bytesReadStateMachine.incr(bytes);
+  }
+
+  public long getBytesReadStateMachine() {
+    return bytesReadStateMachine.value();
   }
 }

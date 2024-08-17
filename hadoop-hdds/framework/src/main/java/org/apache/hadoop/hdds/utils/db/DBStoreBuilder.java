@@ -32,6 +32,7 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 
+import com.google.protobuf.MessageLite;
 import org.apache.hadoop.hdds.HddsConfigKeys;
 import org.apache.hadoop.hdds.StringUtils;
 import org.apache.hadoop.hdds.conf.ConfigurationSource;
@@ -51,6 +52,7 @@ import static org.rocksdb.RocksDB.DEFAULT_COLUMN_FAMILY;
 import org.apache.hadoop.hdds.conf.StorageUnit;
 import org.apache.hadoop.hdds.utils.db.managed.ManagedColumnFamilyOptions;
 import org.apache.hadoop.hdds.utils.db.managed.ManagedDBOptions;
+import org.apache.hadoop.hdds.utils.db.managed.ManagedLogger;
 import org.apache.hadoop.hdds.utils.db.managed.ManagedRocksDB;
 import org.apache.hadoop.hdds.utils.db.managed.ManagedStatistics;
 import org.apache.hadoop.hdds.utils.db.managed.ManagedWriteOptions;
@@ -82,6 +84,9 @@ public final class DBStoreBuilder {
   // The column family options that will be used for any column families
   // added by name only (without specifying options).
   private ManagedColumnFamilyOptions defaultCfOptions;
+  // Initialize the Statistics instance if ROCKSDB_STATISTICS enabled
+  private ManagedStatistics statistics;
+
   private String dbname;
   private Path dbPath;
   private String dbJmxBeanNameName;
@@ -99,11 +104,13 @@ public final class DBStoreBuilder {
   private boolean openReadOnly = false;
   private int maxFSSnapshots = 0;
   private final DBProfile defaultCfProfile;
-  private boolean enableCompactionLog;
+  private boolean enableCompactionDag;
   private boolean createCheckpointDirs = true;
   // this is to track the total size of dbUpdates data since sequence
   // number in request to avoid increase in heap memory.
   private long maxDbUpdatesSizeThreshold;
+  private Integer maxNumberOfOpenFiles = null;
+  private String threadNamePrefix = "";
 
   /**
    * Create DBStoreBuilder from a generic DBDefinition.
@@ -181,6 +188,17 @@ public final class DBStoreBuilder {
     }
   }
 
+  private void setDBOptionsProps(ManagedDBOptions dbOptions) {
+    if (maxNumberOfOpenFiles != null) {
+      dbOptions.setMaxOpenFiles(maxNumberOfOpenFiles);
+    }
+    if (!rocksDbStat.equals(OZONE_METADATA_STORE_ROCKSDB_STATISTICS_OFF)) {
+      statistics = new ManagedStatistics();
+      statistics.setStatsLevel(StatsLevel.valueOf(rocksDbStat));
+      dbOptions.setStatistics(statistics);
+    }
+  }
+
   /**
    * Builds a DBStore instance and returns that.
    *
@@ -199,7 +217,7 @@ public final class DBStoreBuilder {
       if (rocksDBOption == null) {
         rocksDBOption = getDefaultDBOptions(tableConfigs);
       }
-
+      setDBOptionsProps(rocksDBOption);
       ManagedWriteOptions writeOptions = new ManagedWriteOptions();
       writeOptions.setSync(rocksDBConfiguration.getSyncOption());
 
@@ -208,10 +226,10 @@ public final class DBStoreBuilder {
         throw new IOException("The DB destination directory should exist.");
       }
 
-      return new RDBStore(dbFile, rocksDBOption, writeOptions, tableConfigs,
+      return new RDBStore(dbFile, rocksDBOption, statistics, writeOptions, tableConfigs,
           registry.build(), openReadOnly, maxFSSnapshots, dbJmxBeanNameName,
-          enableCompactionLog, maxDbUpdatesSizeThreshold, createCheckpointDirs,
-          configuration);
+          enableCompactionDag, maxDbUpdatesSizeThreshold, createCheckpointDirs,
+          configuration, threadNamePrefix);
     } finally {
       tableConfigs.forEach(TableConfig::close);
     }
@@ -246,6 +264,10 @@ public final class DBStoreBuilder {
     return this;
   }
 
+  public <T extends MessageLite> DBStoreBuilder addProto2Codec(T type) {
+    return addCodec((Class<T>)type.getClass(), Proto2Codec.get(type));
+  }
+
   public DBStoreBuilder setDBOptions(ManagedDBOptions option) {
     rocksDBOption = option;
     return this;
@@ -268,8 +290,8 @@ public final class DBStoreBuilder {
     return this;
   }
 
-  public DBStoreBuilder setEnableCompactionLog(boolean enableCompactionLog) {
-    this.enableCompactionLog = enableCompactionLog;
+  public DBStoreBuilder setEnableCompactionDag(boolean enableCompactionDag) {
+    this.enableCompactionDag = enableCompactionDag;
     return this;
   }
 
@@ -284,6 +306,16 @@ public final class DBStoreBuilder {
   public DBStoreBuilder setProfile(DBProfile prof) {
     setDBOptions(prof.getDBOptions());
     setDefaultCFOptions(prof.getColumnFamilyOptions());
+    return this;
+  }
+
+  public DBStoreBuilder setMaxNumberOfOpenFiles(Integer maxNumberOfOpenFiles) {
+    this.maxNumberOfOpenFiles = maxNumberOfOpenFiles;
+    return this;
+  }
+
+  public DBStoreBuilder setThreadNamePrefix(String prefix) {
+    this.threadNamePrefix = prefix;
     return this;
   }
 
@@ -374,28 +406,20 @@ public final class DBStoreBuilder {
 
     // Apply logging settings.
     if (rocksDBConfiguration.isRocksdbLoggingEnabled()) {
-      org.rocksdb.Logger logger = new org.rocksdb.Logger(dbOptions) {
-        @Override
-        protected void log(InfoLogLevel infoLogLevel, String s) {
-          ROCKS_DB_LOGGER.info(s);
-        }
-      };
+      ManagedLogger logger = new ManagedLogger(dbOptions, (infoLogLevel, s) -> ROCKS_DB_LOGGER.info(s));
       InfoLogLevel level = InfoLogLevel.valueOf(rocksDBConfiguration
           .getRocksdbLogLevel() + "_LEVEL");
       logger.setInfoLogLevel(level);
       dbOptions.setLogger(logger);
     }
 
+    // RocksDB log settings.
+    dbOptions.setMaxLogFileSize(rocksDBConfiguration.getMaxLogFileSize());
+    dbOptions.setKeepLogFileNum(rocksDBConfiguration.getKeepLogFileNum());
+
     // Apply WAL settings.
     dbOptions.setWalTtlSeconds(rocksDBConfiguration.getWalTTL());
     dbOptions.setWalSizeLimitMB(rocksDBConfiguration.getWalSizeLimit());
-
-    // Create statistics.
-    if (!rocksDbStat.equals(OZONE_METADATA_STORE_ROCKSDB_STATISTICS_OFF)) {
-      ManagedStatistics statistics = new ManagedStatistics();
-      statistics.setStatsLevel(StatsLevel.valueOf(rocksDbStat));
-      dbOptions.setStatistics(statistics);
-    }
 
     return dbOptions;
   }

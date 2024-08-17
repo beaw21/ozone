@@ -19,9 +19,10 @@ package org.apache.hadoop.ozone.admin.reconfig;
 
 import org.apache.hadoop.hdds.cli.HddsVersionProvider;
 import org.apache.hadoop.hdds.protocol.ReconfigureProtocol;
-import picocli.CommandLine;
+import org.apache.hadoop.hdds.protocol.proto.HddsProtos;
 import picocli.CommandLine.Command;
-import java.util.concurrent.Callable;
+
+import java.io.IOException;
 
 /**
  * Handler of ozone admin reconfig start command.
@@ -31,20 +32,20 @@ import java.util.concurrent.Callable;
     description = "Start reconfig asynchronously",
     mixinStandardHelpOptions = true,
     versionProvider = HddsVersionProvider.class)
-public class ReconfigureStartSubcommand implements Callable<Void> {
-
-  @CommandLine.ParentCommand
-  private ReconfigureCommands parent;
+public class ReconfigureStartSubcommand extends AbstractReconfigureSubCommand {
 
   @Override
-  public Void call() throws Exception {
-    ReconfigureProtocol reconfigProxy = ReconfigureSubCommandUtil
-        .getSingleNodeReconfigureProxy(parent.getAddress());
-    String serverName = reconfigProxy.getServerName();
-    reconfigProxy.startReconfigure();
-    System.out.printf("%s: Started reconfiguration task on node [%s].%n",
-        serverName, parent.getAddress());
-    return null;
+  protected void executeCommand(HddsProtos.NodeType nodeType, String address) {
+    try (ReconfigureProtocol reconfigProxy = ReconfigureSubCommandUtil
+        .getSingleNodeReconfigureProxy(nodeType, address)) {
+      String serverName = reconfigProxy.getServerName();
+      reconfigProxy.startReconfigure();
+      System.out.printf("%s: Started reconfiguration task on node [%s].%n",
+          serverName, address);
+    } catch (IOException e) {
+      System.out.println("An error occurred while executing the command for :"
+          + address);
+      e.printStackTrace(System.out);
+    }
   }
-
 }

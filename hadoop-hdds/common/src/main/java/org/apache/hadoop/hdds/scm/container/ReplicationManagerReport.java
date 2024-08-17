@@ -58,23 +58,26 @@ public class ReplicationManagerReport {
    */
   public enum HealthState {
     UNDER_REPLICATED("Containers with insufficient replicas",
-        "NumUnderReplicatedContainers"),
+        "UnderReplicatedContainers"),
     MIS_REPLICATED("Containers with insufficient racks",
-        "NumMisReplicatedContainers"),
+        "MisReplicatedContainers"),
     OVER_REPLICATED("Containers with more replicas than required",
-        "NumOverReplicatedContainers"),
+        "OverReplicatedContainers"),
     MISSING("Containers with no online replicas",
-        "NumMissingContainers"),
+        "MissingContainers"),
     UNHEALTHY(
         "Containers Closed or Quasi_Closed having some replicas in " +
-            "a different state", "NumUnhealthyContainers"),
-    EMPTY("Containers having no blocks", "NumEmptyContainers"),
+            "a different state", "UnhealthyContainers"),
+    EMPTY("Containers having no blocks", "EmptyContainers"),
     OPEN_UNHEALTHY(
         "Containers open and having replicas with different states",
-        "NumOpenUnhealthyContainers"),
+        "OpenUnhealthyContainers"),
     QUASI_CLOSED_STUCK(
         "Containers QuasiClosed with insufficient datanode origins",
-        "NumStuckQuasiClosedContainers");
+        "StuckQuasiClosedContainers"),
+    OPEN_WITHOUT_PIPELINE(
+        "Containers in OPEN state without any healthy Pipeline",
+        "OpenContainersWithoutPipeline");
 
     private String description;
     private String metricName;
@@ -126,11 +129,6 @@ public class ReplicationManagerReport {
   }
 
   public void incrementAndSample(HealthState stat, ContainerID container) {
-    incrementAndSample(stat.toString(), container);
-  }
-
-  public void incrementAndSample(HddsProtos.LifeCycleState stat,
-      ContainerID container) {
     incrementAndSample(stat.toString(), container);
   }
 
@@ -236,10 +234,6 @@ public class ReplicationManagerReport {
           + " is not expected to have existing samples");
     }
     containerSample.put(stat, sample);
-  }
-
-  public List<ContainerID> getSample(HddsProtos.LifeCycleState stat) {
-    return getSample(stat.toString());
   }
 
   public List<ContainerID> getSample(HealthState stat) {

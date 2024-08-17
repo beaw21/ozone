@@ -26,8 +26,6 @@ import org.apache.hadoop.hdds.conf.OzoneConfiguration;
 import org.apache.hadoop.hdds.protocol.MockDatanodeDetails;
 import org.apache.hadoop.hdds.protocol.proto.HddsProtos.ReplicationFactor;
 import org.apache.hadoop.hdds.protocol.proto
-    .StorageContainerDatanodeProtocolProtos.CRLStatusReport;
-import org.apache.hadoop.hdds.protocol.proto
     .StorageContainerDatanodeProtocolProtos.PipelineAction;
 import org.apache.hadoop.hdds.protocol.proto
     .StorageContainerDatanodeProtocolProtos.ClosePipelineInfo;
@@ -74,10 +72,13 @@ import org.apache.hadoop.hdds.protocol.DatanodeDetails;
 import org.apache.hadoop.hdds.scm.server.SCMDatanodeProtocolServer;
 import org.apache.hadoop.hdds.scm.server.SCMStorageConfig;
 import org.apache.hadoop.hdds.scm.server.StorageContainerManager;
+import org.apache.hadoop.ipc.RPC;
+import org.apache.hadoop.ipc.Server;
 import org.apache.hadoop.ozone.OzoneConsts;
 import org.apache.hadoop.ozone.common.Storage;
 import org.apache.hadoop.ozone.common.statemachine.InvalidStateTransitionException;
 import org.apache.hadoop.ozone.protocol.commands.RegisteredCommand;
+import org.apache.hadoop.security.UserGroupInformation;
 import org.apache.hadoop.security.authentication.client
     .AuthenticationException;
 
@@ -90,6 +91,9 @@ import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.ThreadLocalRandom;
 import java.util.concurrent.TimeoutException;
+
+import static org.mockito.Mockito.spy;
+import static org.mockito.Mockito.when;
 
 /**
  * Stateless helper functions for Hdds tests.
@@ -517,20 +521,6 @@ public final class HddsTestUtils {
     return report.build();
   }
 
-  /**
-   * Create CRL Status report object.
-   * @param pendingCRLIds List of Pending CRL Ids in the report.
-   * @param receivedCRLId Latest received CRL Id in the report.
-   * @return {@link CRLStatusReport}
-   */
-  public static CRLStatusReport createCRLStatusReport(
-      List<Long> pendingCRLIds, long receivedCRLId) {
-    CRLStatusReport.Builder report = CRLStatusReport.newBuilder();
-    report.addAllPendingCrlIds(pendingCRLIds);
-    report.setReceivedCrlId(receivedCRLId);
-    return report.build();
-  }
-
   public static org.apache.hadoop.hdds.scm.container.ContainerInfo
       allocateContainer(ContainerManager containerManager)
       throws IOException, TimeoutException {
@@ -736,7 +726,8 @@ public final class HddsTestUtils {
             .setDatanodeDetails(datanodeDetails)
             .setOriginNodeId(originNodeId).setSequenceId(sequenceId)
             .setBytesUsed(usedBytes)
-            .setKeyCount(keyCount);
+            .setKeyCount(keyCount)
+            .setEmpty(keyCount == 0);
   }
 
   public static ContainerReplica getReplicas(
@@ -867,5 +858,12 @@ public final class HddsTestUtils {
                     .setDeleteTransactionId(0)
                     .setReplicaIndex(replicaIndex)
                     .build();
+  }
+
+  public static void mockRemoteUser(UserGroupInformation ugi) {
+    Server.Call call = spy(new Server.Call(1, 1, null, null,
+        RPC.RpcKind.RPC_BUILTIN, new byte[] {1, 2, 3}));
+    when(call.getRemoteUser()).thenReturn(ugi);
+    Server.getCurCall().set(call);
   }
 }

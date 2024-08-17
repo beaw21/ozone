@@ -13,6 +13,9 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+
+#checks:basic
+
 DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" >/dev/null 2>&1 && pwd )"
 cd "$DIR/../../.." || exit 1
 
@@ -21,13 +24,7 @@ mkdir -p "$REPORT_DIR"
 
 REPORT_FILE="$REPORT_DIR/summary.txt"
 
-dirs="hadoop-hdds hadoop-ozone"
-
-for d in $dirs; do
-  pushd "$d" || exit 1
-  mvn -B --no-transfer-progress -fn org.apache.rat:apache-rat-plugin:0.13:check
-  popd
-done
+mvn -B --no-transfer-progress -fn org.apache.rat:apache-rat-plugin:check "$@"
 
 grep -r --include=rat.txt "!????" $dirs | tee "$REPORT_FILE"
 

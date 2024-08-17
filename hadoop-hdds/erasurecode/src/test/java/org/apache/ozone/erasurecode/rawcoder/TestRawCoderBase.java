@@ -20,11 +20,14 @@ package org.apache.ozone.erasurecode.rawcoder;
 import org.apache.hadoop.hdds.client.ECReplicationConfig;
 import org.apache.ozone.erasurecode.ECChunk;
 import org.apache.ozone.erasurecode.TestCoderBase;
-import org.apache.ozone.test.LambdaTestUtils;
-import org.junit.jupiter.api.Assertions;
 import org.junit.jupiter.api.Test;
 
 import java.io.IOException;
+
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.fail;
 
 /**
  * Raw coder test base with utilities.
@@ -90,13 +93,9 @@ public abstract class TestRawCoderBase extends TestCoderBase {
   protected void testCodingWithBadInput(boolean usingDirectBuffer) {
     this.usingDirectBuffer = usingDirectBuffer;
     prepareCoders(true);
-
-    try {
-      performTestCoding(baseChunkSize, false, true, false);
-      Assertions.fail("Encoding test with bad input should fail");
-    } catch (Exception e) {
-      // Expected
-    }
+    assertThrows(Exception.class,
+        () -> performTestCoding(baseChunkSize, false, true, false),
+        "Encoding test with bad input should fail");
   }
 
   /**
@@ -106,13 +105,9 @@ public abstract class TestRawCoderBase extends TestCoderBase {
   protected void testCodingWithBadOutput(boolean usingDirectBuffer) {
     this.usingDirectBuffer = usingDirectBuffer;
     prepareCoders(true);
-
-    try {
-      performTestCoding(baseChunkSize, false, false, true);
-      Assertions.fail("Decoding test with bad output should fail");
-    } catch (Exception e) {
-      // Expected
-    }
+    assertThrows(Exception.class,
+        () -> performTestCoding(baseChunkSize, false, false, true),
+        "Decoding test with bad output should fail");
   }
 
   /**
@@ -127,31 +122,21 @@ public abstract class TestRawCoderBase extends TestCoderBase {
     encoder.release();
     final ECChunk[] data = prepareDataChunksForEncoding();
     final ECChunk[] parity = prepareParityChunksForEncoding();
-    LambdaTestUtils.intercept(IOException.class, "closed",
+    IOException ioException = assertThrows(IOException.class,
         () -> encoder.encode(data, parity));
-
+    assertThat(ioException.getMessage()).contains("closed");
     decoder.release();
     final ECChunk[] in = prepareInputChunksForDecoding(data, parity);
     final ECChunk[] out = prepareOutputChunksForDecoding();
-    LambdaTestUtils.intercept(IOException.class, "closed",
+    ioException = assertThrows(IOException.class,
         () -> decoder.decode(in, getErasedIndexesForDecoding(), out));
+    assertThat(ioException.getMessage()).contains("closed");
   }
 
   @Test
   public void testCodingWithErasingTooMany() {
-    try {
-      testCoding(true);
-      Assertions.fail("Decoding test erasing too many should fail");
-    } catch (Exception e) {
-      // Expected
-    }
-
-    try {
-      testCoding(false);
-      Assertions.fail("Decoding test erasing too many should fail");
-    } catch (Exception e) {
-      // Expected
-    }
+    assertThrows(Exception.class, () -> testCoding(true), "Decoding test erasing too many should fail");
+    assertThrows(Exception.class, () -> testCoding(false), "Decoding test erasing too many should fail");
   }
 
   @Test
@@ -188,7 +173,7 @@ public abstract class TestRawCoderBase extends TestCoderBase {
     try {
       encoder.encode(dataChunks, parityChunks);
     } catch (IOException e) {
-      Assertions.fail("Should not get IOException: " + e.getMessage());
+      fail("Should not get IOException: " + e.getMessage());
     }
     dumpChunks("Encoded parity chunks", parityChunks);
 
@@ -225,7 +210,7 @@ public abstract class TestRawCoderBase extends TestCoderBase {
       decoder.decode(inputChunks, getErasedIndexesForDecoding(),
           recoveredChunks);
     } catch (IOException e) {
-      Assertions.fail("Should not get IOException: " + e.getMessage());
+      fail("Should not get IOException: " + e.getMessage());
     }
     dumpChunks("Decoded/recovered chunks", recoveredChunks);
 
@@ -315,7 +300,7 @@ public abstract class TestRawCoderBase extends TestCoderBase {
     try {
       encoder.encode(dataChunks, parityChunks);
     } catch (IOException e) {
-      Assertions.fail("Should not get IOException: " + e.getMessage());
+      fail("Should not get IOException: " + e.getMessage());
     }
     verifyBufferPositionAtEnd(dataChunks);
 
@@ -329,7 +314,7 @@ public abstract class TestRawCoderBase extends TestCoderBase {
       decoder.decode(inputChunks, getErasedIndexesForDecoding(),
           recoveredChunks);
     } catch (IOException e) {
-      Assertions.fail("Should not get IOException: " + e.getMessage());
+      fail("Should not get IOException: " + e.getMessage());
     }
     verifyBufferPositionAtEnd(inputChunks);
   }
@@ -337,7 +322,7 @@ public abstract class TestRawCoderBase extends TestCoderBase {
   private void verifyBufferPositionAtEnd(ECChunk[] inputChunks) {
     for (ECChunk chunk : inputChunks) {
       if (chunk != null) {
-        Assertions.assertEquals(0, chunk.getBuffer().remaining());
+        assertEquals(0, chunk.getBuffer().remaining());
       }
     }
   }

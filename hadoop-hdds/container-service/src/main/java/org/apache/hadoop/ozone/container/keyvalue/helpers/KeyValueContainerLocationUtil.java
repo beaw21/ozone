@@ -123,16 +123,14 @@ public final class KeyValueContainerLocationUtil {
    * Return containerDB File.
    */
   public static File getContainerDBFile(KeyValueContainerData containerData) {
-    if (containerData.getSchemaVersion().equals(OzoneConsts.SCHEMA_V3)) {
+    if (containerData.hasSchema(OzoneConsts.SCHEMA_V3)) {
+      Preconditions.checkNotNull(containerData.getVolume().getDbParentDir(), "Base Directory cannot be null");
       return new File(containerData.getVolume().getDbParentDir(),
           OzoneConsts.CONTAINER_DB_NAME);
     }
-    return getContainerDBFile(containerData.getMetadataPath(), containerData);
-  }
-
-  public static File getContainerDBFile(String baseDir,
-      KeyValueContainerData containerData) {
-    return new File(baseDir, containerData.getContainerID() +
+    Preconditions.checkNotNull(containerData.getMetadataPath(), "Metadata Directory cannot be null");
+    return new File(containerData.getMetadataPath(), containerData.getContainerID() +
         OzoneConsts.DN_CONTAINER_DB);
   }
+
 }

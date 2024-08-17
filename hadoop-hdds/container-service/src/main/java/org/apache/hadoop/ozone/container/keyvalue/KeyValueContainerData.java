@@ -31,16 +31,18 @@ import org.apache.hadoop.hdds.protocol.datanode.proto.ContainerProtos
 import org.apache.hadoop.hdds.utils.MetadataKeyFilters.KeyPrefixFilter;
 import org.apache.hadoop.hdds.utils.db.BatchOperation;
 import org.apache.hadoop.hdds.utils.db.Table;
-import org.apache.hadoop.ozone.OzoneConsts;
 import org.apache.hadoop.ozone.container.common.impl.ContainerLayoutVersion;
 import org.apache.hadoop.ozone.container.common.impl.ContainerData;
 import org.apache.hadoop.ozone.container.common.interfaces.DBHandle;
+import org.apache.hadoop.ozone.container.keyvalue.helpers.KeyValueContainerUtil;
 import org.yaml.snakeyaml.nodes.Tag;
 
 
 import java.io.File;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicLong;
 
 import static java.lang.Math.max;
@@ -51,6 +53,9 @@ import static org.apache.hadoop.ozone.OzoneConsts.CONTAINER_DB_TYPE;
 import static org.apache.hadoop.ozone.OzoneConsts.DELETE_TRANSACTION_KEY;
 import static org.apache.hadoop.ozone.OzoneConsts.DELETING_KEY_PREFIX;
 import static org.apache.hadoop.ozone.OzoneConsts.METADATA_PATH;
+import static org.apache.hadoop.ozone.OzoneConsts.SCHEMA_V1;
+import static org.apache.hadoop.ozone.OzoneConsts.SCHEMA_V2;
+import static org.apache.hadoop.ozone.OzoneConsts.SCHEMA_V3;
 import static org.apache.hadoop.ozone.OzoneConsts.SCHEMA_VERSION;
 import static org.apache.hadoop.ozone.OzoneConsts.CONTAINER_BYTES_USED;
 import static org.apache.hadoop.ozone.OzoneConsts.BLOCK_COUNT;
@@ -89,7 +94,7 @@ public class KeyValueContainerData extends ContainerData {
 
   private long blockCommitSequenceId;
 
-  private int replicaIndex;
+  private final Set<Long> finalizedBlockSet;
 
   static {
     // Initialize YAML fields
@@ -113,6 +118,7 @@ public class KeyValueContainerData extends ContainerData {
         size, originPipelineId, originNodeId);
     this.numPendingDeletionBlocks = new AtomicLong(0);
     this.deleteTransactionId = 0;
+    finalizedBlockSet =  ConcurrentHashMap.newKeySet();
   }
 
   public KeyValueContainerData(KeyValueContainerData source) {
@@ -122,7 +128,7 @@ public class KeyValueContainerData extends ContainerData {
     this.numPendingDeletionBlocks = new AtomicLong(0);
     this.deleteTransactionId = 0;
     this.schemaVersion = source.getSchemaVersion();
-    this.replicaIndex = source.getReplicaIndex();
+    finalizedBlockSet = ConcurrentHashMap.newKeySet();
   }
 
   /**
@@ -139,6 +145,25 @@ public class KeyValueContainerData extends ContainerData {
    */
   public String getSchemaVersion() {
     return schemaVersion;
+  }
+
+  /**
+   * Returns schema version or the default value when the
+   * {@link KeyValueContainerData#schemaVersion} is null. The default value can
+   * be referred to {@link KeyValueContainerUtil#isSameSchemaVersion}.
+   *
+   * @return Schema version as a string.
+   * @throws UnsupportedOperationException If no valid schema version is found.
+   */
+  public String getSupportedSchemaVersionOrDefault() {
+    String[] versions = {SCHEMA_V1, SCHEMA_V2, SCHEMA_V3};
+
+    for (String version : versions) {
+      if (this.hasSchema(version)) {
+        return version;
+      }
+    }
+    throw new UnsupportedOperationException("No valid schema version found.");
   }
 
   /**
@@ -257,6 +282,34 @@ public class KeyValueContainerData extends ContainerData {
   }
 
   /**
+   * Add the given localID of a block to the finalizedBlockSet.
+   */
+  public void addToFinalizedBlockSet(long localID) {
+    finalizedBlockSet.add(localID);
+  }
+
+  public Set<Long> getFinalizedBlockSet() {
+    return finalizedBlockSet;
+  }
+
+  public boolean isFinalizedBlockExist(long localID) {
+    return finalizedBlockSet.contains(localID);
+  }
+
+  public void clearFinalizedBlock(DBHandle db) throws IOException {
+    if (!finalizedBlockSet.isEmpty()) {
+      // delete from db and clear memory
+      // Should never fail.
+      Preconditions.checkNotNull(db, "DB cannot be null here");
+      try (BatchOperation batch = db.getStore().getBatchHandler().initBatchOperation()) {
+        db.getStore().getFinalizeBlocksTable().deleteBatchWithPrefix(batch, containerPrefix());
+        db.getStore().getBatchHandler().commitBatchOperation(batch);
+      }
+      finalizedBlockSet.clear();
+    }
+  }
+
+  /**
    * Returns a ProtoBuf Message from ContainerData.
    *
    * @return Protocol Buffer Message
@@ -325,14 +378,6 @@ public class KeyValueContainerData extends ContainerData {
     metadataTable.put(getPendingDeleteBlockCountKey(), 0L);
   }
 
-  public int getReplicaIndex() {
-    return replicaIndex;
-  }
-
-  public void setReplicaIndex(int replicaIndex) {
-    this.replicaIndex = replicaIndex;
-  }
-
   // NOTE: Below are some helper functions to format keys according
   // to container schemas, we should use them instead of using
   // raw const variables defined.
@@ -388,7 +433,7 @@ public class KeyValueContainerData extends ContainerData {
    * @return
    */
   public String startKeyEmpty() {
-    if (schemaVersion.equals(OzoneConsts.SCHEMA_V3)) {
+    if (hasSchema(SCHEMA_V3)) {
       return getContainerKeyPrefix(getContainerID());
     }
     return null;
@@ -400,7 +445,7 @@ public class KeyValueContainerData extends ContainerData {
    * @return
    */
   public String containerPrefix() {
-    if (schemaVersion.equals(OzoneConsts.SCHEMA_V3)) {
+    if (hasSchema(SCHEMA_V3)) {
       return getContainerKeyPrefix(getContainerID());
     }
     return "";
@@ -414,9 +459,14 @@ public class KeyValueContainerData extends ContainerData {
    * @return formatted key
    */
   private String formatKey(String key) {
-    if (schemaVersion.equals(OzoneConsts.SCHEMA_V3)) {
+    if (hasSchema(SCHEMA_V3)) {
       key = getContainerKeyPrefix(getContainerID()) + key;
     }
     return key;
   }
+
+  public boolean hasSchema(String version) {
+    return KeyValueContainerUtil.isSameSchemaVersion(schemaVersion, version);
+  }
+
 }

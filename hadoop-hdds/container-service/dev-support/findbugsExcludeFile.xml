@@ -15,18 +15,6 @@
    limitations under the License.
 -->
 <FindBugsFilter>
-  <Match>
-    <Class name="org.apache.hadoop.ozone.container.common.volume.AbstractFuture" />
-    <Bug pattern="DLS_DEAD_STORE_OF_CLASS_LITERAL" />
-  </Match>
-  <Match>
-    <Class name="org.apache.hadoop.ozone.container.common.volume.AbstractFuture" />
-    <Bug pattern="DLS_DEAD_LOCAL_STORE" />
-  </Match>
-  <Match>
-    <Class name="org.apache.hadoop.ozone.container.common.volume.AbstractFuture" />
-    <Bug pattern="NS_DANGEROUS_NON_SHORT_CIRCUIT" />
-  </Match>
 
   <!-- Test -->
   <Match>
@@ -66,6 +54,10 @@
     <Bug pattern="RV_RETURN_VALUE_IGNORED_BAD_PRACTICE" />
   </Match>
   <Match>
+    <Class name="org.apache.hadoop.ozone.container.common.statemachine.commandhandler.TestDeleteBlocksCommandHandler" />
+    <Bug pattern="URF_UNREAD_PUBLIC_OR_PROTECTED_FIELD" />
+  </Match>
+  <Match>
     <Class name="org.apache.hadoop.ozone.container.common.volume.TestVolumeSet" />
     <Bug pattern="RV_RETURN_VALUE_IGNORED_BAD_PRACTICE" />
   </Match>
@@ -82,7 +74,11 @@
     <Bug pattern="NP_NULL_ON_SOME_PATH_FROM_RETURN_VALUE" />
   </Match>
   <Match>
-    <Class name="org.apache.hadoop.ozone.container.ozoneimpl.TestContainerScannerMetrics"/>
-    <Bug pattern="RU_INVOKE_RUN" />
+    <Class name="org.apache.hadoop.ozone.container.ozoneimpl.TestBackgroundContainerDataScanner"/>
+    <Bug pattern="RU_INVOKE_RUN, RV_RETURN_VALUE_IGNORED_NO_SIDE_EFFECT" />
+  </Match>
+  <Match>
+    <Class name="org.apache.hadoop.ozone.container.ozoneimpl.TestBackgroundContainerMetadataScanner"/>
+    <Bug pattern="RU_INVOKE_RUN, RV_RETURN_VALUE_IGNORED_NO_SIDE_EFFECT" />
   </Match>
 </FindBugsFilter>

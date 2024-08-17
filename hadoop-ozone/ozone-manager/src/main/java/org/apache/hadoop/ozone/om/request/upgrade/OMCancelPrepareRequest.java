@@ -17,9 +17,13 @@
 
 package org.apache.hadoop.ozone.om.request.upgrade;
 
+import java.util.HashMap;
+import org.apache.hadoop.ozone.audit.AuditLogger;
+import org.apache.hadoop.ozone.audit.OMAction;
+import org.apache.hadoop.ozone.protocol.proto.OzoneManagerProtocolProtos;
+import org.apache.ratis.server.protocol.TermIndex;
 import org.apache.hadoop.ozone.om.OzoneManager;
 import org.apache.hadoop.ozone.om.exceptions.OMException;
-import org.apache.hadoop.ozone.om.ratis.utils.OzoneManagerDoubleBufferHelper;
 import org.apache.hadoop.ozone.om.request.OMClientRequest;
 import org.apache.hadoop.ozone.om.request.util.OmResponseUtil;
 import org.apache.hadoop.ozone.om.response.OMClientResponse;
@@ -31,6 +35,7 @@ import org.apache.hadoop.ozone.protocol.proto.OzoneManagerProtocolProtos.OMRespo
 
 import static org.apache.hadoop.ozone.protocol.proto.OzoneManagerProtocolProtos.Type;
 
+import org.apache.hadoop.security.UserGroupInformation;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -48,23 +53,24 @@ public class OMCancelPrepareRequest extends OMClientRequest {
   }
 
   @Override
-  public OMClientResponse validateAndUpdateCache(
-      OzoneManager ozoneManager, long transactionLogIndex,
-      OzoneManagerDoubleBufferHelper ozoneManagerDoubleBufferHelper) {
+  public OMClientResponse validateAndUpdateCache(OzoneManager ozoneManager, TermIndex termIndex) {
 
-    LOG.info("OM {} Received cancel prepare request with log index {}",
-        ozoneManager.getOMNodeId(), transactionLogIndex);
+    LOG.info("OM {} Received cancel prepare request with log {}", ozoneManager.getOMNodeId(), termIndex);
 
     OMRequest omRequest = getOmRequest();
+    AuditLogger auditLogger = ozoneManager.getAuditLogger();
+    OzoneManagerProtocolProtos.UserInfo userInfo = omRequest.getUserInfo();
     OMResponse.Builder responseBuilder =
         OmResponseUtil.getOMResponseBuilder(omRequest);
     responseBuilder.setCmdType(Type.CancelPrepare);
     OMClientResponse response = null;
+    Exception exception = null;
 
     try {
-      if (ozoneManager.getAclsEnabled() && !ozoneManager.isAdmin(createUGI())) {
+      UserGroupInformation ugi = createUGIForApi();
+      if (ozoneManager.getAclsEnabled() && !ozoneManager.isAdmin(ugi)) {
         throw new OMException("Access denied for user "
-            + createUGI() + ". " +
+            + ugi + ". " +
             "Superuser privilege is required to cancel ozone manager " +
             "preparation.",
             OMException.ResultCodes.ACCESS_DENIED);
@@ -79,18 +85,19 @@ public class OMCancelPrepareRequest extends OMClientRequest {
       // Deletes on disk marker file, does not update DB and therefore does
       // not update cache.
       ozoneManager.getPrepareState().cancelPrepare();
-      ozoneManagerDoubleBufferHelper.add(response, transactionLogIndex);
 
-      LOG.info("OM {} prepare state cancelled at log index {}. Returning " +
-              "response {}",
-          ozoneManager.getOMNodeId(), transactionLogIndex, omResponse);
+      LOG.info("OM {} prepare state cancelled at log {}. Returning response {}",
+          ozoneManager.getOMNodeId(), termIndex, omResponse);
     } catch (IOException e) {
+      exception = e;
       LOG.error("Cancel Prepare Request apply failed in {}. ",
           ozoneManager.getOMNodeId(), e);
       response = new OMPrepareResponse(
           createErrorOMResponse(responseBuilder, e));
     }
 
+    markForAudit(auditLogger, buildAuditMessage(OMAction.UPGRADE_CANCEL,
+        new HashMap<>(), exception, userInfo));
     return response;
   }
 

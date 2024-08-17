@@ -39,7 +39,11 @@ public enum HDDSLayoutFeature implements LayoutFeature {
   RATIS_DATASTREAM_PORT_IN_DATANODEDETAILS(5, "Adding the RATIS_DATASTREAM " +
       "port to the DatanodeDetails."),
   WEBUI_PORTS_IN_DATANODEDETAILS(6, "Adding HTTP and HTTPS ports " +
-      "to DatanodeDetails.");
+      "to DatanodeDetails."),
+  HADOOP_PRC_PORTS_IN_DATANODEDETAILS(7, "Adding Hadoop RPC ports " +
+                                     "to DatanodeDetails."),
+  HBASE_SUPPORT(8, "Datanode RocksDB Schema Version 3 has an extra table " +
+          "for the last chunk of blocks to support HBase.)");
 
   //////////////////////////////  //////////////////////////////
 

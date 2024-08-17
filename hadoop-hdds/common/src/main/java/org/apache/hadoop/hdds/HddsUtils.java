@@ -19,6 +19,9 @@
 package org.apache.hadoop.hdds;
 
 import com.google.protobuf.ServiceException;
+
+import jakarta.annotation.Nonnull;
+import jakarta.annotation.Nullable;
 import javax.management.ObjectName;
 import java.io.File;
 import java.io.IOException;
@@ -32,9 +35,11 @@ import java.util.Collections;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Optional;
 import java.util.OptionalInt;
 import java.util.TreeMap;
+import java.util.UUID;
 
 import org.apache.hadoop.conf.ConfigRedactor;
 import org.apache.hadoop.fs.CommonConfigurationKeysPublic;
@@ -47,6 +52,7 @@ import org.apache.hadoop.hdds.conf.OzoneConfiguration;
 import org.apache.hadoop.hdds.protocol.datanode.proto.ContainerProtos;
 import org.apache.hadoop.hdds.protocol.datanode.proto.ContainerProtos.ContainerCommandRequestProtoOrBuilder;
 import org.apache.hadoop.hdds.protocol.datanode.proto.ContainerProtos.ContainerDataProto.State;
+import org.apache.hadoop.hdds.protocol.proto.HddsProtos;
 import org.apache.hadoop.hdds.scm.ScmConfigKeys;
 import org.apache.hadoop.hdds.scm.ha.SCMHAUtils;
 import org.apache.hadoop.hdds.scm.ha.SCMNodeInfo;
@@ -65,6 +71,11 @@ import org.apache.commons.lang3.StringUtils;
 import static org.apache.hadoop.hdds.DFSConfigKeysLegacy.DFS_DATANODE_DNS_INTERFACE_KEY;
 import static org.apache.hadoop.hdds.DFSConfigKeysLegacy.DFS_DATANODE_DNS_NAMESERVER_KEY;
 import static org.apache.hadoop.hdds.DFSConfigKeysLegacy.DFS_DATANODE_HOST_NAME_KEY;
+import static org.apache.hadoop.hdds.HddsConfigKeys.HDDS_DATANODE_CLIENT_ADDRESS_KEY;
+import static org.apache.hadoop.hdds.HddsConfigKeys.HDDS_DATANODE_CLIENT_BIND_HOST_DEFAULT;
+import static org.apache.hadoop.hdds.HddsConfigKeys.HDDS_DATANODE_CLIENT_BIND_HOST_KEY;
+import static org.apache.hadoop.hdds.HddsConfigKeys.HDDS_DATANODE_CLIENT_PORT_DEFAULT;
+import static org.apache.hadoop.hdds.HddsConfigKeys.HDDS_DATANODE_CLIENT_PORT_KEY;
 import static org.apache.hadoop.hdds.recon.ReconConfigKeys.OZONE_RECON_ADDRESS_KEY;
 import static org.apache.hadoop.hdds.recon.ReconConfigKeys.OZONE_RECON_DATANODE_PORT_DEFAULT;
 import static org.apache.hadoop.hdds.scm.ScmConfigKeys.OZONE_SCM_ADDRESS_KEY;
@@ -80,6 +91,7 @@ import org.apache.hadoop.security.token.SecretManager;
 import org.apache.ratis.thirdparty.com.google.protobuf.ByteString;
 import org.apache.ratis.util.SizeInBytes;
 import org.apache.hadoop.ozone.conf.OzoneServiceConfig;
+import org.apache.ratis.util.function.CheckedSupplier;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -92,17 +104,6 @@ public final class HddsUtils {
 
 
   private static final Logger LOG = LoggerFactory.getLogger(HddsUtils.class);
-
-  /**
-   * The service ID of the solitary Ozone SCM service.
-   */
-  public static final String OZONE_SCM_SERVICE_ID = "OzoneScmService";
-  public static final String OZONE_SCM_SERVICE_INSTANCE_ID =
-      "OzoneScmServiceInstance";
-
-  private static final String MULTIPLE_SCM_NOT_YET_SUPPORTED =
-      ScmConfigKeys.OZONE_SCM_NAMES + " must contain a single hostname."
-          + " Multiple SCM hosts are currently unsupported";
 
   public static final ByteString REDACTED =
       ByteString.copyFromUtf8("<redacted>");
@@ -389,6 +390,25 @@ public final class HddsUtils {
   }
 
   /**
+   * Retrieve the socket address that is used by Datanode.
+   * @param conf
+   * @return Target InetSocketAddress for the Datanode service endpoint.
+   */
+  public static InetSocketAddress
+      getDatanodeRpcAddress(ConfigurationSource conf) {
+    final String host = getHostNameFromConfigKeys(conf,
+        HDDS_DATANODE_CLIENT_BIND_HOST_KEY)
+        .orElse(HDDS_DATANODE_CLIENT_BIND_HOST_DEFAULT);
+
+    final int port = getPortNumberFromConfigKeys(conf,
+        HDDS_DATANODE_CLIENT_ADDRESS_KEY)
+        .orElse(conf.getInt(HDDS_DATANODE_CLIENT_PORT_KEY,
+            HDDS_DATANODE_CLIENT_PORT_DEFAULT));
+
+    return NetUtils.createSocketAddr(host + ":" + port);
+  }
+
+  /**
    * Checks if the container command is read only or not.
    * @param proto ContainerCommand Request proto
    * @return True if its readOnly , false otherwise.
@@ -415,6 +435,12 @@ public final class HddsUtils {
     case DeleteBlock:
     case PutBlock:
     case PutSmallFile:
+    case StreamInit:
+    case StreamWrite:
+    case FinalizeBlock:
+      return false;
+    case Echo:
+      return proto.getEcho().hasReadOnly() && proto.getEcho().getReadOnly();
     default:
       return false;
     }
@@ -453,6 +479,7 @@ public final class HddsUtils {
     case PutSmallFile:
     case ReadChunk:
     case WriteChunk:
+    case FinalizeBlock:
       return true;
     default:
       return false;
@@ -530,6 +557,11 @@ public final class HddsUtils {
     case WriteChunk:
       if (msg.hasWriteChunk()) {
         blockID = msg.getWriteChunk().getBlockID();
+      }
+      break;
+    case FinalizeBlock:
+      if (msg.hasFinalizeBlock()) {
+        blockID = msg.getFinalizeBlock().getBlockID();
       }
       break;
     default:
@@ -612,30 +644,6 @@ public final class HddsUtils {
       throw new IllegalArgumentException("Unable to create path: " + dirFile);
     }
     return dirFile;
-  }
-
-  /**
-   * Leverages the Configuration.getPassword method to attempt to get
-   * passwords from the CredentialProvider API before falling back to
-   * clear text in config - if falling back is allowed.
-   * @param conf Configuration instance
-   * @param alias name of the credential to retrieve
-   * @return String credential value or null
-   */
-  static String getPassword(ConfigurationSource conf, String alias) {
-    String password = null;
-    try {
-      char[] passchars = conf.getPassword(alias);
-      if (passchars != null) {
-        password = new String(passchars);
-      }
-    } catch (IOException ioe) {
-      LOG.warn("Setting password to null since IOException is caught"
-          + " when getting password", ioe);
-
-      password = null;
-    }
-    return password;
   }
 
   /**
@@ -799,5 +807,74 @@ public final class HddsUtils {
       sortedOzoneProps.put(entry.getKey(), value);
     }
     return sortedOzoneProps;
+  }
+
+  @Nonnull
+  public static String threadNamePrefix(@Nullable Object id) {
+    return id != null && !"".equals(id)
+        ? id + "-"
+        : "";
+  }
+
+  /**
+   * Execute some code and ensure thread name is not changed
+   * (workaround for HADOOP-18433).
+   */
+  public static <T, E extends IOException> T preserveThreadName(
+      CheckedSupplier<T, E> supplier) throws E {
+    final Thread thread = Thread.currentThread();
+    final String threadName = thread.getName();
+
+    try {
+      return supplier.get();
+    } finally {
+      if (!Objects.equals(threadName, thread.getName())) {
+        LOG.info("Restoring thread name: {}", threadName);
+        thread.setName(threadName);
+      }
+    }
+  }
+
+  /**
+   * Transform a protobuf UUID to Java UUID.
+   */
+  public static UUID fromProtobuf(HddsProtos.UUID uuid) {
+    Objects.requireNonNull(uuid,
+        "HddsProtos.UUID can't be null to transform to java UUID.");
+    return new UUID(uuid.getMostSigBits(), uuid.getLeastSigBits());
+  }
+
+  /**
+   * Transform a Java UUID to protobuf UUID.
+   */
+  public static HddsProtos.UUID toProtobuf(UUID uuid) {
+    Objects.requireNonNull(uuid,
+        "UUID can't be null to transform to protobuf UUID.");
+    return HddsProtos.UUID.newBuilder()
+        .setMostSigBits(uuid.getMostSignificantBits())
+        .setLeastSigBits(uuid.getLeastSignificantBits())
+        .build();
+  }
+
+  /** Concatenate stack trace {@code elements} (one per line) starting at
+   * {@code startIndex}. */
+  public static @Nonnull String formatStackTrace(
+      @Nullable StackTraceElement[] elements, int startIndex) {
+    if (elements != null && elements.length > startIndex) {
+      final StringBuilder sb = new StringBuilder();
+      for (int line = startIndex; line < elements.length; line++) {
+        sb.append(elements[line]).append("\n");
+      }
+      return sb.toString();
+    }
+    return "";
+  }
+
+  /** @return current thread stack trace if {@code logger} has debug enabled */
+  public static @Nullable StackTraceElement[] getStackTrace(
+      @Nonnull Logger logger) {
+    return logger.isDebugEnabled()
+        ? Thread.currentThread().getStackTrace()
+        : null;
   }
 }

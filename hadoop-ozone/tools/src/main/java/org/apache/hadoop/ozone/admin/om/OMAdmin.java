@@ -53,13 +53,15 @@ import java.util.Collection;
     versionProvider = HddsVersionProvider.class,
     subcommands = {
         FinalizeUpgradeSubCommand.class,
+        ListOpenFilesSubCommand.class,
         GetServiceRolesSubcommand.class,
         PrepareSubCommand.class,
         CancelPrepareSubCommand.class,
         FinalizationStatusSubCommand.class,
         DecommissionOMSubcommand.class,
         UpdateRangerSubcommand.class,
-        TransferOmLeaderSubCommand.class
+        TransferOmLeaderSubCommand.class,
+        FetchKeySubCommand.class
     })
 @MetaInfServices(SubcommandWithParent.class)
 public class OMAdmin extends GenericCli implements SubcommandWithParent {
@@ -132,8 +134,8 @@ public class OMAdmin extends GenericCli implements SubcommandWithParent {
   private String getTheOnlyConfiguredOmServiceIdOrThrow() {
     if (getConfiguredServiceIds().size() != 1) {
       throw new IllegalArgumentException("There is no Ozone Manager service ID "
-          + "specified, but there are either zero, or more than one service "
-          + "configured. Please specify the service ID to be finalized.");
+          + "specified, but there are either zero, or more than one service ID"
+          + "configured.");
     }
     return getConfiguredServiceIds().iterator().next();
   }

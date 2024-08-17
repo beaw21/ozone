@@ -19,12 +19,13 @@ package org.apache.hadoop.ozone.om.helpers;
 
 import java.io.IOException;
 import java.util.ArrayList;
-import java.util.BitSet;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.concurrent.CopyOnWriteArrayList;
 
+import com.google.common.collect.ImmutableList;
 import org.apache.commons.lang3.StringUtils;
 import org.apache.commons.lang3.tuple.Pair;
 import org.apache.hadoop.fs.FileChecksum;
@@ -32,6 +33,11 @@ import org.apache.hadoop.fs.FileEncryptionInfo;
 import org.apache.hadoop.hdds.client.ContainerBlockID;
 import org.apache.hadoop.hdds.client.ECReplicationConfig;
 import org.apache.hadoop.hdds.client.ReplicationConfig;
+import org.apache.hadoop.hdds.utils.db.Codec;
+import org.apache.hadoop.hdds.utils.db.DelegatedCodec;
+import org.apache.hadoop.hdds.utils.db.CopyObject;
+import org.apache.hadoop.hdds.utils.db.Proto2Codec;
+import org.apache.hadoop.ozone.ClientVersion;
 import org.apache.hadoop.ozone.OzoneAcl;
 import org.apache.hadoop.ozone.OzoneConsts;
 import org.apache.hadoop.ozone.protocol.proto.OzoneManagerProtocolProtos.FileChecksumProto;
@@ -48,8 +54,25 @@ import org.slf4j.LoggerFactory;
  * This is returned from OM to client, and client use class to talk to
  * datanode. Also, this is the metadata written to om.db on server side.
  */
-public final class OmKeyInfo extends WithParentObjectId implements Cloneable {
+public final class OmKeyInfo extends WithParentObjectId
+    implements CopyObject<OmKeyInfo>, WithTags {
   private static final Logger LOG = LoggerFactory.getLogger(OmKeyInfo.class);
+
+  private static final Codec<OmKeyInfo> CODEC_TRUE = newCodec(true);
+  private static final Codec<OmKeyInfo> CODEC_FALSE = newCodec(false);
+
+  private static Codec<OmKeyInfo> newCodec(boolean ignorePipeline) {
+    return new DelegatedCodec<>(
+        Proto2Codec.get(KeyInfo.getDefaultInstance()),
+        OmKeyInfo::getFromProtobuf,
+        k -> k.getProtobuf(ignorePipeline, ClientVersion.CURRENT_VERSION));
+  }
+
+  public static Codec<OmKeyInfo> getCodec(boolean ignorePipeline) {
+    LOG.info("OmKeyInfo.getCodec ignorePipeline = {}", ignorePipeline);
+    return ignorePipeline ? CODEC_TRUE : CODEC_FALSE;
+  }
+
   private final String volumeName;
   private final String bucketName;
   // name of key client specified
@@ -60,7 +83,7 @@ public final class OmKeyInfo extends WithParentObjectId implements Cloneable {
   private long modificationTime;
   private ReplicationConfig replicationConfig;
   private FileEncryptionInfo encInfo;
-  private FileChecksum fileChecksum;
+  private final FileChecksum fileChecksum;
   /**
    * Support OFS use-case to identify if the key is a file or a directory.
    */
@@ -72,51 +95,44 @@ public final class OmKeyInfo extends WithParentObjectId implements Cloneable {
    * keyName is "a/b/key1" then the fileName stores "key1".
    */
   private String fileName;
+  private String ownerName;
 
   /**
    * ACL Information.
    */
-  private List<OzoneAcl> acls;
+  private final CopyOnWriteArrayList<OzoneAcl> acls;
 
-  @SuppressWarnings("parameternumber")
-  OmKeyInfo(String volumeName, String bucketName, String keyName,
-      List<OmKeyLocationInfoGroup> versions, long dataSize,
-      long creationTime, long modificationTime,
-      ReplicationConfig replicationConfig,
-      Map<String, String> metadata,
-      FileEncryptionInfo encInfo, List<OzoneAcl> acls,
-      long objectID, long updateID, FileChecksum fileChecksum) {
-    this.volumeName = volumeName;
-    this.bucketName = bucketName;
-    this.keyName = keyName;
-    this.dataSize = dataSize;
-    this.keyLocationVersions = versions;
-    this.creationTime = creationTime;
-    this.modificationTime = modificationTime;
-    this.replicationConfig = replicationConfig;
-    this.metadata = metadata;
-    this.encInfo = encInfo;
-    this.acls = acls;
-    this.objectID = objectID;
-    this.updateID = updateID;
-    this.fileChecksum = fileChecksum;
-  }
+  /**
+   * Used for S3 tags.
+   */
+  private Map<String, String> tags;
 
-  @SuppressWarnings("parameternumber")
-  OmKeyInfo(String volumeName, String bucketName, String keyName,
-            String fileName, List<OmKeyLocationInfoGroup> versions,
-            long dataSize, long creationTime, long modificationTime,
-            ReplicationConfig replicationConfig,
-            Map<String, String> metadata,
-            FileEncryptionInfo encInfo, List<OzoneAcl> acls,
-            long parentObjectID, long objectID, long updateID,
-            FileChecksum fileChecksum, boolean isFile) {
-    this(volumeName, bucketName, keyName, versions, dataSize,
-            creationTime, modificationTime, replicationConfig, metadata,
-            encInfo, acls, objectID, updateID, fileChecksum);
-    this.fileName = fileName;
-    this.parentObjectID = parentObjectID;
-    this.isFile = isFile;
+  // expectedDataGeneration, when used in key creation indicates that a
+  // key with the same keyName should exist with the given generation.
+  // For a key commit to succeed, the original key should still be present with the
+  // generation unchanged.
+  // This allows a key to be created an committed atomically if the original has not
+  // been modified.
+  private Long expectedDataGeneration = null;
+
+  private OmKeyInfo(Builder b) {
+    super(b);
+    this.volumeName = b.volumeName;
+    this.bucketName = b.bucketName;
+    this.keyName = b.keyName;
+    this.dataSize = b.dataSize;
+    this.keyLocationVersions = b.omKeyLocationInfoGroups;
+    this.creationTime = b.creationTime;
+    this.modificationTime = b.modificationTime;
+    this.replicationConfig = b.replicationConfig;
+    this.encInfo = b.encInfo;
+    this.acls = new CopyOnWriteArrayList<>(b.acls);
+    this.fileChecksum = b.fileChecksum;
+    this.fileName = b.fileName;
+    this.isFile = b.isFile;
+    this.ownerName = b.ownerName;
+    this.tags = b.tags;
+    this.expectedDataGeneration = b.expectedDataGeneration;
   }
 
   public String getVolumeName() {
@@ -159,10 +175,25 @@ public final class OmKeyInfo extends WithParentObjectId implements Cloneable {
     return fileName;
   }
 
-  public long getParentObjectID() {
-    return parentObjectID;
+  public void setExpectedDataGeneration(Long generation) {
+    this.expectedDataGeneration = generation;
   }
 
+  public Long getExpectedDataGeneration() {
+    return expectedDataGeneration;
+  }
+
+  public String getOwnerName() {
+    return ownerName;
+  }
+
+  /**
+   * Returns the generation of the object. Note this is currently the same as updateID for a key.
+   * @return long
+   */
+  public long getGeneration() {
+    return getUpdateID();
+  }
 
   public synchronized OmKeyLocationInfoGroup getLatestVersionLocations() {
     return keyLocationVersions.size() == 0 ? null :
@@ -178,10 +209,6 @@ public final class OmKeyInfo extends WithParentObjectId implements Cloneable {
     this.keyLocationVersions = keyLocationVersions;
   }
 
-  public void updateModifcationTime() {
-    this.modificationTime = Time.monotonicNow();
-  }
-
   public void setFile(boolean file) {
     isFile = file;
   }
@@ -191,7 +218,17 @@ public final class OmKeyInfo extends WithParentObjectId implements Cloneable {
   }
 
   public boolean isHsync() {
-    return metadata.containsKey(OzoneConsts.HSYNC_CLIENT_ID);
+    return getMetadata().containsKey(OzoneConsts.HSYNC_CLIENT_ID);
+  }
+
+  @Override
+  public Map<String, String> getTags() {
+    return tags;
+  }
+
+  @Override
+  public void setTags(Map<String, String> tags) {
+    this.tags = tags;
   }
 
   /**
@@ -376,7 +413,7 @@ public final class OmKeyInfo extends WithParentObjectId implements Cloneable {
   }
 
   public List<OzoneAcl> getAcls() {
-    return acls;
+    return ImmutableList.copyOf(acls);
   }
 
   public boolean addAcl(OzoneAcl acl) {
@@ -391,10 +428,6 @@ public final class OmKeyInfo extends WithParentObjectId implements Cloneable {
     return OzoneAclUtil.setAcl(acls, newAcls);
   }
 
-  public void setParentObjectID(long parentObjectID) {
-    this.parentObjectID = parentObjectID;
-  }
-
   public void setReplicationConfig(ReplicationConfig repConfig) {
     this.replicationConfig = repConfig;
   }
@@ -403,35 +436,54 @@ public final class OmKeyInfo extends WithParentObjectId implements Cloneable {
     return fileChecksum;
   }
 
+  @Override
+  public String toString() {
+    return "OmKeyInfo{" +
+        "volumeName='" + volumeName + '\'' +
+        ", bucketName='" + bucketName + '\'' +
+        ", keyName='" + keyName + '\'' +
+        ", dataSize=" + dataSize +
+        ", keyLocationVersions=" + keyLocationVersions +
+        ", creationTime=" + creationTime +
+        ", modificationTime=" + modificationTime +
+        ", replicationConfig=" + replicationConfig +
+        ", encInfo=" + (encInfo == null ? "null" : "<REDACTED>") +
+        ", fileChecksum=" + fileChecksum +
+        ", isFile=" + isFile +
+        ", fileName='" + fileName + '\'' +
+        ", acls=" + acls +
+        '}';
+  }
+
   /**
    * Builder of OmKeyInfo.
    */
-  public static class Builder {
+  public static class Builder extends WithParentObjectId.Builder {
     private String volumeName;
     private String bucketName;
     private String keyName;
+    private String ownerName;
     private long dataSize;
-    private List<OmKeyLocationInfoGroup> omKeyLocationInfoGroups =
+    private final List<OmKeyLocationInfoGroup> omKeyLocationInfoGroups =
         new ArrayList<>();
     private long creationTime;
     private long modificationTime;
     private ReplicationConfig replicationConfig;
-    private Map<String, String> metadata;
     private FileEncryptionInfo encInfo;
-    private List<OzoneAcl> acls;
-    private long objectID;
-    private long updateID;
+    private final List<OzoneAcl> acls = new ArrayList<>();
     // not persisted to DB. FileName will be the last element in path keyName.
     private String fileName;
-    private long parentObjectID;
     private FileChecksum fileChecksum;
 
     private boolean isFile;
+    private final Map<String, String> tags = new HashMap<>();
+    private Long expectedDataGeneration = null;
 
     public Builder() {
-      this.metadata = new HashMap<>();
-      omKeyLocationInfoGroups = new ArrayList<>();
-      acls = new ArrayList<>();
+    }
+
+    public Builder(OmKeyInfo obj) {
+      super(obj);
     }
 
     public Builder setVolumeName(String volume) {
@@ -446,6 +498,11 @@ public final class OmKeyInfo extends WithParentObjectId implements Cloneable {
 
     public Builder setKeyName(String key) {
       this.keyName = key;
+      return this;
+    }
+
+    public Builder setOwnerName(String owner) {
+      this.ownerName = owner;
       return this;
     }
 
@@ -485,13 +542,15 @@ public final class OmKeyInfo extends WithParentObjectId implements Cloneable {
       return this;
     }
 
+    @Override
     public Builder addMetadata(String key, String value) {
-      metadata.put(key, value);
+      super.addMetadata(key, value);
       return this;
     }
 
+    @Override
     public Builder addAllMetadata(Map<String, String> newMetadata) {
-      metadata.putAll(newMetadata);
+      super.addAllMetadata(newMetadata);
       return this;
     }
 
@@ -514,13 +573,15 @@ public final class OmKeyInfo extends WithParentObjectId implements Cloneable {
       return this;
     }
 
+    @Override
     public Builder setObjectID(long obId) {
-      this.objectID = obId;
+      super.setObjectID(obId);
       return this;
     }
 
+    @Override
     public Builder setUpdateID(long id) {
-      this.updateID = id;
+      super.setUpdateID(id);
       return this;
     }
 
@@ -529,8 +590,9 @@ public final class OmKeyInfo extends WithParentObjectId implements Cloneable {
       return this;
     }
 
+    @Override
     public Builder setParentObjectID(long parentID) {
-      this.parentObjectID = parentID;
+      super.setParentObjectID(parentID);
       return this;
     }
 
@@ -544,12 +606,23 @@ public final class OmKeyInfo extends WithParentObjectId implements Cloneable {
       return this;
     }
 
+    public Builder addTag(String key, String value) {
+      tags.put(key, value);
+      return this;
+    }
+
+    public Builder addAllTags(Map<String, String> keyTags) {
+      tags.putAll(keyTags);
+      return this;
+    }
+
+    public Builder setExpectedDataGeneration(Long existingGeneration) {
+      this.expectedDataGeneration = existingGeneration;
+      return this;
+    }
+
     public OmKeyInfo build() {
-      return new OmKeyInfo(
-              volumeName, bucketName, keyName, fileName,
-              omKeyLocationInfoGroups, dataSize, creationTime,
-              modificationTime, replicationConfig, metadata, encInfo, acls,
-              parentObjectID, objectID, updateID, fileChecksum, isFile);
+      return new OmKeyInfo(this);
     }
   }
 
@@ -633,11 +706,12 @@ public final class OmKeyInfo extends WithParentObjectId implements Cloneable {
         .addAllKeyLocationList(keyLocations)
         .setCreationTime(creationTime)
         .setModificationTime(modificationTime)
-        .addAllMetadata(KeyValueUtil.toProtobuf(metadata))
+        .addAllMetadata(KeyValueUtil.toProtobuf(getMetadata()))
+        .addAllTags(KeyValueUtil.toProtobuf(getTags()))
         .addAllAcls(OzoneAclUtil.toProtobuf(acls))
-        .setObjectID(objectID)
-        .setUpdateID(updateID)
-        .setParentID(parentObjectID);
+        .setObjectID(getObjectID())
+        .setUpdateID(getUpdateID())
+        .setParentID(getParentObjectID());
 
     FileChecksumProto fileChecksumProto = OMPBHelper.convert(fileChecksum);
     if (fileChecksumProto != null) {
@@ -652,6 +726,12 @@ public final class OmKeyInfo extends WithParentObjectId implements Cloneable {
       kb.setFileEncryptionInfo(OMPBHelper.convert(encInfo));
     }
     kb.setIsFile(isFile);
+    if (expectedDataGeneration != null) {
+      kb.setExpectedDataGeneration(expectedDataGeneration);
+    }
+    if (ownerName != null) {
+      kb.setOwnerName(ownerName);
+    }
     return kb.build();
   }
 
@@ -678,6 +758,7 @@ public final class OmKeyInfo extends WithParentObjectId implements Cloneable {
             .fromProto(keyInfo.getType(), keyInfo.getFactor(),
                 keyInfo.getEcReplicationConfig()))
         .addAllMetadata(KeyValueUtil.getFromProtobuf(keyInfo.getMetadataList()))
+        .addAllTags(KeyValueUtil.getFromProtobuf(keyInfo.getTagsList()))
         .setFileEncryptionInfo(keyInfo.hasFileEncryptionInfo() ?
             OMPBHelper.convert(keyInfo.getFileEncryptionInfo()) : null)
         .setAcls(OzoneAclUtil.fromProtobuf(keyInfo.getAclsList()));
@@ -698,7 +779,13 @@ public final class OmKeyInfo extends WithParentObjectId implements Cloneable {
     if (keyInfo.hasIsFile()) {
       builder.setFile(keyInfo.getIsFile());
     }
+    if (keyInfo.hasExpectedDataGeneration()) {
+      builder.setExpectedDataGeneration(keyInfo.getExpectedDataGeneration());
+    }
 
+    if (keyInfo.hasOwnerName()) {
+      builder.setOwnerName(keyInfo.getOwnerName());
+    }
     // not persisted to DB. FileName will be filtered out from keyName
     builder.setFileName(OzoneFSUtils.getFileName(keyInfo.getKeyName()));
     return builder.build();
@@ -710,13 +797,55 @@ public final class OmKeyInfo extends WithParentObjectId implements Cloneable {
         "volume='" + volumeName + '\'' +
         ", bucket='" + bucketName + '\'' +
         ", key='" + keyName + '\'' +
+        ", owner='" + ownerName + '\'' +
         ", dataSize='" + dataSize + '\'' +
         ", creationTime='" + creationTime + '\'' +
-        ", objectID='" + objectID + '\'' +
-        ", parentID='" + parentObjectID + '\'' +
+        ", objectID='" + getObjectID() + '\'' +
+        ", parentID='" + getParentObjectID() + '\'' +
         ", replication='" + replicationConfig + '\'' +
         ", fileChecksum='" + fileChecksum +
         '}';
+  }
+
+
+  public boolean isKeyInfoSame(OmKeyInfo omKeyInfo, boolean checkPath,
+                               boolean checkKeyLocationVersions,
+                               boolean checkModificationTime,
+                               boolean checkUpdateID,
+                               boolean checkOwnerName) {
+    boolean isEqual = dataSize == omKeyInfo.dataSize &&
+        creationTime == omKeyInfo.creationTime &&
+        volumeName.equals(omKeyInfo.volumeName) &&
+        bucketName.equals(omKeyInfo.bucketName) &&
+        replicationConfig.equals(omKeyInfo.replicationConfig) &&
+        Objects.equals(getMetadata(), omKeyInfo.getMetadata()) &&
+        Objects.equals(acls, omKeyInfo.acls) &&
+        getObjectID() == omKeyInfo.getObjectID();
+
+    if (isEqual && checkUpdateID) {
+      isEqual = getUpdateID() == omKeyInfo.getUpdateID();
+    }
+
+    if (isEqual && checkModificationTime) {
+      isEqual = modificationTime == omKeyInfo.modificationTime;
+    }
+
+    if (isEqual && checkPath) {
+      isEqual = getParentObjectID() == omKeyInfo.getParentObjectID() &&
+          keyName.equals(omKeyInfo.keyName);
+    }
+
+    if (isEqual && checkKeyLocationVersions) {
+      isEqual = Objects
+          .equals(keyLocationVersions, omKeyInfo.keyLocationVersions);
+    }
+
+    if (isEqual && checkOwnerName) {
+      isEqual = Objects
+          .equals(ownerName, omKeyInfo.ownerName);
+    }
+
+    return isEqual;
   }
 
   @Override
@@ -727,44 +856,30 @@ public final class OmKeyInfo extends WithParentObjectId implements Cloneable {
     if (o == null || getClass() != o.getClass()) {
       return false;
     }
-    OmKeyInfo omKeyInfo = (OmKeyInfo) o;
-    return dataSize == omKeyInfo.dataSize &&
-        creationTime == omKeyInfo.creationTime &&
-        modificationTime == omKeyInfo.modificationTime &&
-        volumeName.equals(omKeyInfo.volumeName) &&
-        bucketName.equals(omKeyInfo.bucketName) &&
-        keyName.equals(omKeyInfo.keyName) &&
-        Objects
-            .equals(keyLocationVersions, omKeyInfo.keyLocationVersions) &&
-        replicationConfig.equals(omKeyInfo.replicationConfig) &&
-        Objects.equals(metadata, omKeyInfo.metadata) &&
-        Objects.equals(acls, omKeyInfo.acls) &&
-        objectID == omKeyInfo.objectID &&
-        updateID == omKeyInfo.updateID &&
-        parentObjectID == omKeyInfo.parentObjectID;
+    return isKeyInfoSame((OmKeyInfo) o, true, true, true, true, true);
   }
 
   @Override
   public int hashCode() {
-    return Objects.hash(volumeName, bucketName, keyName, parentObjectID);
+    return Objects.hash(volumeName, bucketName, keyName, getParentObjectID());
   }
 
   /**
    * Return a new copy of the object.
    */
+  @Override
   public OmKeyInfo copyObject() {
-    OmKeyInfo.Builder builder = new OmKeyInfo.Builder()
+    OmKeyInfo.Builder builder = new OmKeyInfo.Builder(this)
         .setVolumeName(volumeName)
         .setBucketName(bucketName)
         .setKeyName(keyName)
+        .setOwnerName(ownerName)
         .setCreationTime(creationTime)
         .setModificationTime(modificationTime)
         .setDataSize(dataSize)
         .setReplicationConfig(replicationConfig)
         .setFileEncryptionInfo(encInfo)
-        .setObjectID(objectID)
-        .setUpdateID(updateID)
-        .setParentObjectID(parentObjectID)
+        .setAcls(acls)
         .setFileName(fileName)
         .setFile(isFile);
 
@@ -774,49 +889,22 @@ public final class OmKeyInfo extends WithParentObjectId implements Cloneable {
                 keyLocationVersion.getLocationList(),
                 keyLocationVersion.isMultipartKey())));
 
-    acls.forEach(acl -> builder.addAcl(new OzoneAcl(acl.getType(),
-            acl.getName(), (BitSet) acl.getAclBitSet().clone(),
-        acl.getAclScope())));
+    if (getMetadata() != null) {
+      getMetadata().forEach(builder::addMetadata);
+    }
 
-    if (metadata != null) {
-      metadata.forEach((k, v) -> builder.addMetadata(k, v));
+    if (getTags() != null) {
+      getTags().forEach(builder::addTag);
     }
 
     if (fileChecksum != null) {
       builder.setFileChecksum(fileChecksum);
     }
-
-    return builder.build();
-  }
-
-  /**
-   * Return a new copy of the object.
-   */
-  @Override
-  public Object clone() throws CloneNotSupportedException {
-    OmKeyInfo omKeyInfo = (OmKeyInfo) super.clone();
-
-    omKeyInfo.metadata = new HashMap<>();
-    omKeyInfo.keyLocationVersions = new ArrayList<>();
-    omKeyInfo.acls = new ArrayList<>();
-
-    keyLocationVersions.stream().filter(keyLocationVersion ->
-            keyLocationVersion != null).forEach(keyLocationVersion ->
-            omKeyInfo.keyLocationVersions.add(
-                    new OmKeyLocationInfoGroup(keyLocationVersion.getVersion(),
-                            keyLocationVersion.getLocationList(),
-                            keyLocationVersion.isMultipartKey())));
-
-    acls.stream().filter(acl -> acl != null).forEach(acl ->
-            omKeyInfo.acls.add(new OzoneAcl(acl.getType(),
-                    acl.getName(), (BitSet) acl.getAclBitSet().clone(),
-                    acl.getAclScope())));
-
-    if (metadata != null) {
-      metadata.forEach((k, v) -> omKeyInfo.metadata.put(k, v));
+    if (expectedDataGeneration != null) {
+      builder.setExpectedDataGeneration(expectedDataGeneration);
     }
 
-    return omKeyInfo;
+    return builder.build();
   }
 
   /**

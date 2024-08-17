@@ -93,14 +93,20 @@ public final class ClusterStateResponse {
   /**
    * Total count of keys marked for deletion in the cluster.
    */
-  @JsonProperty("deletedKeys")
-  private long deletedKeys;
+  @JsonProperty("keysPendingDeletion")
+  private long keysPendingDeletion;
 
   /**
    * Total count of directories marked for deletion in the cluster.
    */
   @JsonProperty
   private long deletedDirs;
+
+  @JsonProperty("scmServiceId")
+  private String scmServiceId;
+
+  @JsonProperty("omServiceId")
+  private String omServiceId;
 
   /**
    * Returns new builder class that builds a ClusterStateResponse.
@@ -122,9 +128,11 @@ public final class ClusterStateResponse {
     this.containers = b.containers;
     this.missingContainers = b.missingContainers;
     this.openContainers = b.openContainers;
-    this.deletedKeys = b.deletedKeys;
+    this.keysPendingDeletion = b.keysPendingDeletion;
     this.deletedDirs = b.deletedDirs;
     this.deletedContainers = b.deletedContainers;
+    this.scmServiceId = b.scmServiceId;
+    this.omServiceId = b.omServiceId;
   }
 
   /**
@@ -143,8 +151,10 @@ public final class ClusterStateResponse {
     private long volumes;
     private long buckets;
     private long keys;
-    private long deletedKeys;
+    private long keysPendingDeletion;
     private long deletedDirs;
+    private String scmServiceId;
+    private String omServiceId;
 
     public Builder() {
       // Default values
@@ -158,7 +168,7 @@ public final class ClusterStateResponse {
       this.pipelines = 0;
       this.totalDatanodes = 0;
       this.healthyDatanodes = 0;
-      this.deletedKeys = 0;
+      this.keysPendingDeletion = 0;
       this.deletedDirs = 0;
     }
 
@@ -212,8 +222,8 @@ public final class ClusterStateResponse {
       return this;
     }
 
-    public void setDeletedKeys(long deletedKeys) {
-      this.deletedKeys = deletedKeys;
+    public void setKeysPendingDeletion(long keysPendingDeletion) {
+      this.keysPendingDeletion = keysPendingDeletion;
     }
 
     public void setDeletedDirs(long deletedDirs) {
@@ -222,6 +232,16 @@ public final class ClusterStateResponse {
 
     public Builder setKeys(long keys) {
       this.keys = keys;
+      return this;
+    }
+
+    public Builder setScmServiceId(String scmServiceId) {
+      this.scmServiceId = scmServiceId;
+      return this;
+    }
+
+    public Builder setOmServiceId(String omServiceId) {
+      this.omServiceId = omServiceId;
       return this;
     }
 
@@ -276,11 +296,20 @@ public final class ClusterStateResponse {
     return keys;
   }
 
-  public long getDeletedKeys() {
-    return deletedKeys;
+  public long getKeysPendingDeletion() {
+    return keysPendingDeletion;
   }
 
   public long getDeletedDirs() {
     return deletedDirs;
   }
+
+  public String getScmServiceId() {
+    return scmServiceId;
+  }
+
+  public String getOmServiceId() {
+    return omServiceId;
+  }
+
 }

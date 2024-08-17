@@ -21,14 +21,16 @@ import com.google.common.primitives.Longs;
 import org.apache.hadoop.hdds.conf.ConfigurationSource;
 import org.apache.hadoop.hdds.protocol.proto.StorageContainerDatanodeProtocolProtos.DeletedBlocksTransaction;
 import org.apache.hadoop.hdds.utils.db.DBColumnFamilyDefinition;
-import org.apache.hadoop.hdds.utils.db.FixedLengthStringUtils;
+import org.apache.hadoop.hdds.utils.db.DBDefinition;
 import org.apache.hadoop.hdds.utils.db.LongCodec;
 import org.apache.hadoop.hdds.utils.db.FixedLengthStringCodec;
+import org.apache.hadoop.hdds.utils.db.Proto2Codec;
 import org.apache.hadoop.hdds.utils.db.managed.ManagedColumnFamilyOptions;
 import org.apache.hadoop.ozone.container.common.helpers.BlockData;
-import org.apache.hadoop.ozone.container.common.helpers.ChunkInfoList;
 import org.apache.hadoop.ozone.container.common.statemachine.DatanodeConfiguration;
 import org.apache.hadoop.ozone.container.common.utils.db.DatanodeDBProfile;
+
+import java.util.Map;
 
 import static org.apache.hadoop.hdds.HddsConfigKeys.HDDS_DB_PROFILE;
 import static org.apache.hadoop.hdds.utils.db.DBStoreBuilder.HDDS_DEFAULT_DB_PROFILE;
@@ -38,7 +40,7 @@ import static org.apache.hadoop.hdds.utils.db.DBStoreBuilder.HDDS_DEFAULT_DB_PRO
  * version 3, where the block data, metadata, and transactions which are to be
  * deleted are put in their own separate column families and with containerID
  * as key prefix.
- *
+ * <p>
  * Some key format illustrations for the column families:
  * - block_data:     containerID | blockID
  * - metadata:       containerID | #BLOCKCOUNT
@@ -46,49 +48,67 @@ import static org.apache.hadoop.hdds.utils.db.DBStoreBuilder.HDDS_DEFAULT_DB_PRO
  *                   ...
  * - deleted_blocks: containerID | blockID
  * - delete_txns:    containerID | TransactionID
- *
+ * <p>
  * The keys would be encoded in a fix-length encoding style in order to
  * utilize the "Prefix Seek" feature from Rocksdb to optimize seek.
  */
 public class DatanodeSchemaThreeDBDefinition
-    extends AbstractDatanodeDBDefinition {
+    extends AbstractDatanodeDBDefinition
+    implements DBDefinition.WithMapInterface {
   public static final DBColumnFamilyDefinition<String, BlockData>
       BLOCK_DATA =
       new DBColumnFamilyDefinition<>(
           "block_data",
           String.class,
-          new FixedLengthStringCodec(),
+          FixedLengthStringCodec.get(),
           BlockData.class,
-          new BlockDataCodec());
+          BlockData.getCodec());
 
   public static final DBColumnFamilyDefinition<String, Long>
       METADATA =
       new DBColumnFamilyDefinition<>(
           "metadata",
           String.class,
-          new FixedLengthStringCodec(),
+          FixedLengthStringCodec.get(),
           Long.class,
-          new LongCodec());
-
-  public static final DBColumnFamilyDefinition<String, ChunkInfoList>
-      DELETED_BLOCKS =
-      new DBColumnFamilyDefinition<>(
-          "deleted_blocks",
-          String.class,
-          new FixedLengthStringCodec(),
-          ChunkInfoList.class,
-          new ChunkInfoListCodec());
+          LongCodec.get());
 
   public static final DBColumnFamilyDefinition<String, DeletedBlocksTransaction>
       DELETE_TRANSACTION =
       new DBColumnFamilyDefinition<>(
           "delete_txns",
           String.class,
-          new FixedLengthStringCodec(),
+          FixedLengthStringCodec.get(),
           DeletedBlocksTransaction.class,
-          new DeletedBlocksTransactionCodec());
+          Proto2Codec.get(DeletedBlocksTransaction.getDefaultInstance()));
+
+  public static final DBColumnFamilyDefinition<String, Long>
+      FINALIZE_BLOCKS =
+      new DBColumnFamilyDefinition<>(
+          "finalize_blocks",
+          String.class,
+          FixedLengthStringCodec.get(),
+          Long.class,
+          LongCodec.get());
+
+  public static final DBColumnFamilyDefinition<String, BlockData>
+      LAST_CHUNK_INFO =
+      new DBColumnFamilyDefinition<>(
+          "last_chunk_info",
+          String.class,
+          FixedLengthStringCodec.get(),
+          BlockData.class,
+          BlockData.getCodec());
 
   private static String separator = "";
+
+  private static final Map<String, DBColumnFamilyDefinition<?, ?>>
+      COLUMN_FAMILIES = DBColumnFamilyDefinition.newUnmodifiableMap(
+         BLOCK_DATA,
+         METADATA,
+         DELETE_TRANSACTION,
+         FINALIZE_BLOCKS,
+         LAST_CHUNK_INFO);
 
   public DatanodeSchemaThreeDBDefinition(String dbPath,
       ConfigurationSource config) {
@@ -109,15 +129,14 @@ public class DatanodeSchemaThreeDBDefinition
 
     BLOCK_DATA.setCfOptions(cfOptions);
     METADATA.setCfOptions(cfOptions);
-    DELETED_BLOCKS.setCfOptions(cfOptions);
     DELETE_TRANSACTION.setCfOptions(cfOptions);
+    FINALIZE_BLOCKS.setCfOptions(cfOptions);
+    LAST_CHUNK_INFO.setCfOptions(cfOptions);
   }
 
   @Override
-  public DBColumnFamilyDefinition[] getColumnFamilies() {
-    return new DBColumnFamilyDefinition[] {getBlockDataColumnFamily(),
-        getMetadataColumnFamily(), getDeletedBlocksColumnFamily(),
-        getDeleteTransactionsColumnFamily()};
+  public Map<String, DBColumnFamilyDefinition<?, ?>> getMap() {
+    return COLUMN_FAMILIES;
   }
 
   @Override
@@ -132,9 +151,9 @@ public class DatanodeSchemaThreeDBDefinition
   }
 
   @Override
-  public DBColumnFamilyDefinition<String, ChunkInfoList>
-      getDeletedBlocksColumnFamily() {
-    return DELETED_BLOCKS;
+  public DBColumnFamilyDefinition<String, BlockData>
+      getLastChunkInfoColumnFamily() {
+    return LAST_CHUNK_INFO;
   }
 
   public DBColumnFamilyDefinition<String, DeletedBlocksTransaction>
@@ -142,20 +161,26 @@ public class DatanodeSchemaThreeDBDefinition
     return DELETE_TRANSACTION;
   }
 
+  @Override
+  public DBColumnFamilyDefinition<String, Long>
+      getFinalizeBlocksColumnFamily() {
+    return FINALIZE_BLOCKS;
+  }
+
   public static int getContainerKeyPrefixLength() {
-    return FixedLengthStringUtils.string2Bytes(
+    return FixedLengthStringCodec.string2Bytes(
         getContainerKeyPrefix(0L)).length;
   }
 
   public static String getContainerKeyPrefix(long containerID) {
     // NOTE: Rocksdb normally needs a fixed length prefix.
-    return FixedLengthStringUtils.bytes2String(Longs.toByteArray(containerID))
+    return FixedLengthStringCodec.bytes2String(Longs.toByteArray(containerID))
         + separator;
   }
 
   public static byte[] getContainerKeyPrefixBytes(long containerID) {
     // NOTE: Rocksdb normally needs a fixed length prefix.
-    return FixedLengthStringUtils.string2Bytes(
+    return FixedLengthStringCodec.string2Bytes(
         getContainerKeyPrefix(containerID));
   }
 
@@ -170,7 +195,7 @@ public class DatanodeSchemaThreeDBDefinition
   public static long getContainerId(String key) {
     int index = getContainerKeyPrefixLength();
     String cid = key.substring(0, index);
-    return Longs.fromByteArray(FixedLengthStringUtils.string2Bytes(cid));
+    return Longs.fromByteArray(FixedLengthStringCodec.string2Bytes(cid));
   }
 
   private void setSeparator(String keySeparator) {

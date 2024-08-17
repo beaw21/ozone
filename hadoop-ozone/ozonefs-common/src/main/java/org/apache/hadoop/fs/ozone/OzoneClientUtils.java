@@ -268,4 +268,16 @@ public final class OzoneClientUtils {
     return limitVal;
   }
 
+  public static void deleteSnapshot(ObjectStore objectStore,
+      String snapshot, String volumeName, String bucketName) {
+    try {
+      objectStore.deleteSnapshot(volumeName,
+          bucketName, snapshot);
+    } catch (IOException exception) {
+      LOG.warn("Failed to delete the temp snapshot with name {} in bucket"
+              + " {} and volume {} after snapDiff op. Exception : {}", snapshot,
+          bucketName, volumeName,
+          exception.getMessage());
+    }
+  }
 }

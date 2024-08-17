@@ -26,7 +26,6 @@ import org.apache.hadoop.hdds.protocol.proto.HddsProtos.OzoneManagerDetailsProto
 import org.apache.hadoop.hdds.protocol.proto.HddsProtos.ScmNodeDetailsProto;
 import org.apache.hadoop.hdds.protocol.proto.HddsProtos.NodeDetailsProto;
 import org.apache.hadoop.hdds.scm.ScmConfig;
-import org.apache.hadoop.hdds.security.x509.crl.CRLInfo;
 import org.apache.hadoop.security.KerberosInfo;
 
 /**
@@ -78,6 +77,18 @@ public interface SCMSecurityProtocol {
       String certSignReq) throws IOException;
 
   /**
+   * Get signed certificate for SCM.
+   *
+   * @param scmNodeDetails  - SCM Node Details.
+   * @param certSignReq     - Certificate signing request.
+   * @param isRenew         - if SCM is renewing certificate or not.
+   * @return String         - pem encoded SCM signed
+   *                          certificate.
+   */
+  String getSCMCertificate(ScmNodeDetailsProto scmNodeDetails,
+      String certSignReq, boolean isRenew) throws IOException;
+
+  /**
    * Get SCM signed certificate for given certificate serial id if it exists.
    * Throws exception if it's not found.
    *
@@ -101,11 +112,9 @@ public interface SCMSecurityProtocol {
    * @param type            - node type: OM/SCM/DN.
    * @param startSerialId   - start certificate serial id.
    * @param count           - max number of certificates returned in a batch.
-   * @param isRevoked       - whether list for revoked certs only.
    * @return list of PEM encoded certificate strings.
    */
-  List<String> listCertificate(HddsProtos.NodeType type, long startSerialId,
-      int count, boolean isRevoked) throws IOException;
+  List<String> listCertificate(HddsProtos.NodeType type, long startSerialId, int count) throws IOException;
 
   /**
    * Get Root CA certificate.
@@ -135,39 +144,28 @@ public interface SCMSecurityProtocol {
   List<String> listCACertificate() throws IOException;
 
   /**
-   * Get the CRLInfo based on the CRL Id.
-   * @param crlIds - crl ids
-   * @return list of CRLInfo
-   * @throws IOException
-   */
-  List<CRLInfo> getCrls(List<Long> crlIds) throws IOException;
-
-  /**
-   * Get the latest CRL id.
-   * @return latest CRL id.
-   */
-  long getLatestCrlId() throws IOException;
-
-
-  /**
-   * Revoke a list of certificates at specified time.
-   * @param certIds - cert ids
-   * @param reason - reason code: refer @org.bouncycastle.asn1.x509.CRLReason.
-   * @param revocationTime - revocation time.
-   * @return
-   * @throws IOException
-   */
-  long revokeCertificates(List<String> certIds, int reason, long revocationTime)
-      throws IOException;
-
-  /**
    * Get SCM signed certificate.
    *
    * @param nodeDetails - Node Details.
-   * @param certSignReq  - Certificate signing request.
+   * @param certSignReq - Certificate signing request.
    * @return String      - pem encoded SCM signed
-   *                         certificate.
+   * certificate.
    */
   String getCertificate(NodeDetailsProto nodeDetails,
       String certSignReq) throws IOException;
+
+  /**
+   * Get all root CA certificates known to SCM.
+   *
+   * @return String     - pem encoded list of root CA certificates
+   */
+  List<String> getAllRootCaCertificates() throws IOException;
+
+  /**
+   * Remove all expired certificates from the SCM metadata store.
+   *
+   * @return list of the removed certificates
+   * @throws IOException
+   */
+  List<String> removeExpiredCertificates() throws IOException;
 }

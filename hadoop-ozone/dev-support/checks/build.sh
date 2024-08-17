@@ -18,7 +18,7 @@ cd "$DIR/../../.." || exit 1
 
 : ${OZONE_WITH_COVERAGE:="false"}
 
-MAVEN_OPTIONS='-V -B -Dmaven.javadoc.skip=true -DskipTests -DskipDocs --no-transfer-progress'
+MAVEN_OPTIONS='-V -B -DskipTests -DskipDocs --no-transfer-progress'
 
 if [[ "${OZONE_WITH_COVERAGE}" == "true" ]]; then
   MAVEN_OPTIONS="${MAVEN_OPTIONS} -Pcoverage"
@@ -26,12 +26,6 @@ else
   MAVEN_OPTIONS="${MAVEN_OPTIONS} -Djacoco.skip"
 fi
 
-if [[ "${CANCEL_NATIVE_VERSION_CHECK}" != "true" ]]; then
-  NATIVE_MAVEN_OPTIONS="-Drocks_tools_native"
-  . "$DIR/native_check.sh"
-  init_native_maven_opts
-  MAVEN_OPTIONS="${MAVEN_OPTIONS} ${NATIVE_MAVEN_OPTIONS}"
-fi
 export MAVEN_OPTS="-Xmx4096m $MAVEN_OPTS"
 echo "${MAVEN_OPTIONS}"
 mvn ${MAVEN_OPTIONS} clean install "$@"

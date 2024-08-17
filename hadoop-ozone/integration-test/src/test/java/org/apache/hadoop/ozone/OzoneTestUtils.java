@@ -17,13 +17,7 @@
  */
 package org.apache.hadoop.ozone;
 
-import java.io.Closeable;
 import java.io.IOException;
-import java.io.UncheckedIOException;
-import java.net.InetAddress;
-import java.net.InetSocketAddress;
-import java.net.ServerSocket;
-import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.TimeoutException;
 
@@ -40,10 +34,11 @@ import org.apache.hadoop.ozone.om.helpers.OmKeyLocationInfo;
 import org.apache.hadoop.ozone.om.helpers.OmKeyLocationInfoGroup;
 import org.apache.ozone.test.GenericTestUtils;
 import org.apache.ozone.test.LambdaTestUtils.VoidCallable;
-
-import org.apache.ratis.util.IOUtils;
 import org.apache.ratis.util.function.CheckedConsumer;
-import org.junit.Assert;
+
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 
 /**
  * Helper class for Tests.
@@ -99,7 +94,7 @@ public final class OzoneTestUtils {
             .updateContainerState(ContainerID.valueOf(blockID.getContainerID()),
                 HddsProtos.LifeCycleEvent.CLOSE);
       }
-      Assert.assertFalse(scm.getContainerManager()
+      assertFalse(scm.getContainerManager()
           .getContainer(ContainerID.valueOf(blockID.getContainerID()))
           .isOpen());
     }, omKeyLocationInfoGroups);
@@ -147,30 +142,10 @@ public final class OzoneTestUtils {
 
   public static <E extends Throwable> void expectOmException(
       OMException.ResultCodes code,
-      VoidCallable eval)
-      throws Exception {
-    try {
-      eval.call();
-      Assert.fail("OMException is expected");
-    } catch (OMException ex) {
-      Assert.assertEquals(code, ex.getResult());
-    }
-  }
+      VoidCallable eval) {
 
-  public static List<ServerSocket> reservePorts(int count) {
-    List<ServerSocket> sockets = new ArrayList<>(count);
-    try {
-      for (int i = 0; i < count; i++) {
-        ServerSocket s = new ServerSocket();
-        sockets.add(s);
-        s.setReuseAddress(true);
-        s.bind(new InetSocketAddress(InetAddress.getByName(null), 0), 1);
-      }
-    } catch (IOException e) {
-      IOUtils.cleanup(null, sockets.toArray(new Closeable[0]));
-      throw new UncheckedIOException(e);
-    }
-    return sockets;
+    OMException ex = assertThrows(OMException.class, () -> eval.call(), "OMException is expected");
+    assertEquals(code, ex.getResult());
   }
 
   /**
@@ -181,7 +156,7 @@ public final class OzoneTestUtils {
       throws IOException, TimeoutException, InterruptedException {
     Pipeline pipeline = scm.getPipelineManager()
         .getPipeline(container.getPipelineID());
-    scm.getPipelineManager().closePipeline(pipeline, false);
+    scm.getPipelineManager().closePipeline(pipeline, true);
     GenericTestUtils.waitFor(() ->
             container.getState() == HddsProtos.LifeCycleState.CLOSED,
         200, 30000);
